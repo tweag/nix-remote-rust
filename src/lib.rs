@@ -1,4 +1,8 @@
-use std::io::{self, Read};
+use num_derive::FromPrimitive;
+use num_traits::FromPrimitive;
+use std::io::{self, Read, Write};
+
+#[derive(FromPrimitive)]
 enum WorkerOp {
     IsValidPath = 1,
     HasSubstitutes = 3,
@@ -45,19 +49,176 @@ enum WorkerOp {
     BuildPathsWithResults = 46,
 }
 
-pub struct NixRead<R>(R);
+const WORKER_MAGIC_1: u64 = 0x6e697863;
+const WORKER_MAGIC_2: u64 = 0x6478696f;
+const PROTOCOL_VERSION: DaemonVersion = DaemonVersion {
+    major: 1,
+    minor: 34,
+};
+const LVL_ERROR: u64 = 0;
 
-impl<R: Read> NixRead<R> {
-    pub fn read_int(&mut self) -> io::Result<u64> {
+pub struct NixReadWrite<R, W> {
+    pub read: R,
+    pub write: W,
+}
+
+impl<R: Read, W: Write> NixReadWrite<R, W> {
+    pub fn read_u64(&mut self) -> io::Result<u64> {
         let mut buf = [0u8; 8];
-        self.0.read_exact(&mut buf)?;
+        self.read.read_exact(&mut buf)?;
         Ok(u64::from_le_bytes(buf))
     }
+
     pub fn read_string(&mut self) -> io::Result<Vec<u8>> {
         // possible errors:
         // Unexecpted EOF
         // IO Error
         // out of memory
-        let len = self.read_int();
+        let len = self.read_u64()? as usize;
+
+        // FIXME don't initialize
+        let mut buf = vec![0; len];
+        self.read.read_exact(&mut buf)?;
+
+        if len % 8 > 0 {
+            let padding = 8 - len % 8;
+            let mut pad_buf = [0; 8];
+            self.read.read_exact(&mut pad_buf[..padding])?;
+        }
+
+        Ok(buf)
+    }
+
+    fn write_u64(&mut self, n: u64) -> io::Result<()> {
+        self.write.write(&n.to_le_bytes())?;
+        Ok(())
+    }
+
+    fn write_string(&mut self, s: &[u8]) -> io::Result<()> {
+        self.write_u64(s.len() as _)?;
+        self.write.write_all(&s)?;
+
+        if s.len() % 8 > 0 {
+            let padding = 8 - s.len() % 8;
+            let pad_buf = [0; 8];
+            self.write.write_all(&pad_buf[..padding])?;
+        }
+
+        Ok(())
+    }
+
+    fn read_command(&mut self) -> io::Result<()> {
+        eprintln!("read_command");
+        let op = self.read_u64()?;
+        eprintln!("op: {op:x}");
+        let Some(op) = WorkerOp::from_u64(op) else {
+            todo!("handle bad worker op");
+        };
+
+        match op {
+            WorkerOp::SetOptions => {
+                let keep_failing = self.read_u64()?;
+                let keep_going = self.read_u64()?;
+                let try_fallback = self.read_u64()?;
+                let verbosity = self.read_u64()?;
+                let max_build_jobs = self.read_u64()?;
+                let max_silent_time = self.read_u64()?;
+                let _use_build_hook = self.read_u64()?;
+                let verbose_build = LVL_ERROR == self.read_u64()?;
+                let _log_type = self.read_u64()?;
+                let _print_build_trace = self.read_u64()?;
+                let build_cores = self.read_u64()?;
+                let use_substitutes = self.read_u64()?;
+
+                let options = Options {
+                    keep_failing,
+                    keep_going,
+                    try_fallback,
+                    verbosity,
+                    max_build_jobs,
+                    max_silent_time,
+                    verbose_build,
+                    build_cores,
+                    use_substitutes,
+                };
+
+                eprintln!("{options:#?}");
+
+                let n = self.read_u64()?;
+                for _ in 0..n {
+                    let name = String::from_utf8(self.read_string()?).unwrap();
+                    let value = String::from_utf8(self.read_string()?).unwrap();
+                    eprintln!("override: {name} = {value}");
+                }
+            }
+            op => eprintln!("received worker op: {}", op as u64),
+        }
+
+        Ok(())
+    }
+
+    pub fn init_connection(&mut self) -> io::Result<()> {
+        let magic = self.read_u64()?;
+        if magic != WORKER_MAGIC_1 {
+            eprintln!("{magic:x}");
+            eprintln!("{WORKER_MAGIC_1:x}");
+            todo!("handle error: protocol mismatch 1");
+        }
+
+        self.write_u64(WORKER_MAGIC_2)?;
+
+        self.write_u64(PROTOCOL_VERSION.into())?;
+        self.write.flush()?;
+
+        if DaemonVersion::from(self.read_u64()?) != PROTOCOL_VERSION {
+            todo!("handle error: protocol mismatch 2");
+        }
+
+        if self.read_u64()? > 0 {
+            let _cpu_affinity = self.read_u64()?;
+        }
+        let _reserve_space = self.read_u64()?;
+
+        // Seems to be ignored (only printed) by the client
+        // FIXME seems like write string isn't working properly
+        self.write_string("Hello from Rust Nix server".as_bytes())?;
+        self.write.flush()?;
+
+        self.read_command()?;
+
+        Ok(())
+    }
+}
+
+#[derive(Debug)]
+struct Options {
+    keep_failing: u64,
+    keep_going: u64,
+    try_fallback: u64,
+    verbosity: u64,
+    max_build_jobs: u64,
+    max_silent_time: u64,
+    verbose_build: bool,
+    build_cores: u64,
+    use_substitutes: u64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct DaemonVersion {
+    major: u8,
+    minor: u8,
+}
+
+impl From<u64> for DaemonVersion {
+    fn from(x: u64) -> Self {
+        let major = ((x >> 8) & 0xff) as u8;
+        let minor = (x & 0xff) as u8;
+        Self { major, minor }
+    }
+}
+
+impl From<DaemonVersion> for u64 {
+    fn from(DaemonVersion { major, minor }: DaemonVersion) -> Self {
+        ((major as u64) << 8) | minor as u64
     }
 }
