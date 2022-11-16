@@ -5,5 +5,5 @@ fn main() {
         read: std::io::stdin(),
         write: std::io::stdout(),
     };
-    rw.init_connection().unwrap();
+    rw.process_connection().unwrap();
 }

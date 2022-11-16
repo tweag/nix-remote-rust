@@ -57,6 +57,18 @@ const PROTOCOL_VERSION: DaemonVersion = DaemonVersion {
 };
 const LVL_ERROR: u64 = 0;
 
+/// Signals that the daemon can send to the client.
+enum StderrSignal {
+    Next = 0x6f6c6d67,
+    Read = 0x64617461,  // data needed from source
+    Write = 0x64617416, // data for sink
+    Last = 0x616c7473,
+    Error = 0x63787470,
+    StartActivity = 0x53545254,
+    StopActivity = 0x53544f50,
+    Result = 0x52534c54,
+}
+
 pub struct NixReadWrite<R, W> {
     pub read: R,
     pub write: W,
@@ -157,7 +169,9 @@ impl<R: Read, W: Write> NixReadWrite<R, W> {
         Ok(())
     }
 
-    pub fn init_connection(&mut self) -> io::Result<()> {
+    /// Process a remote nix connection.
+    /// Reimplement Daemon::processConnection from nix/src/libstore/daemon.cc
+    pub fn process_connection(&mut self) -> io::Result<()> {
         let magic = self.read_u64()?;
         if magic != WORKER_MAGIC_1 {
             eprintln!("{magic:x}");
@@ -166,25 +180,37 @@ impl<R: Read, W: Write> NixReadWrite<R, W> {
         }
 
         self.write_u64(WORKER_MAGIC_2)?;
-
         self.write_u64(PROTOCOL_VERSION.into())?;
         self.write.flush()?;
 
-        if DaemonVersion::from(self.read_u64()?) != PROTOCOL_VERSION {
-            todo!("handle error: protocol mismatch 2");
+        let client_version = self.read_u64()?;
+
+        if client_version < 0x10a {
+            eprintln!("Client version {client_version} is too old");
+            todo!("handle error: client version");
         }
 
-        if self.read_u64()? > 0 {
-            let _cpu_affinity = self.read_u64()?;
-        }
-        let _reserve_space = self.read_u64()?;
+        // TODO keep track of number of WorkerOps performed
+        let mut _op_count: u64 = 0;
 
-        // Seems to be ignored (only printed) by the client
-        // FIXME seems like write string isn't working properly
-        self.write_string("Hello from Rust Nix server".as_bytes())?;
+        let daemon_version = DaemonVersion::from(client_version);
+
+        if daemon_version.minor >= 14 {
+            let _obsolete_cpu_affinity = self.read_u64()?;
+        }
+
+        if daemon_version.minor >= 11 {
+            let _obsolete_reserve_space = self.read_u64()?;
+        }
+
+        if daemon_version.minor >= 33 {
+            // TODO figure out what we need to set as the version
+            self.write_string("rust-nix-bazel-0.1.0".as_bytes())?;
+        }
+        self.write_u64(StderrSignal::Last as u64)?; // Send startup messages to the client
         self.write.flush()?;
 
-        self.read_command()?;
+        // TODO process worker ops
 
         Ok(())
     }
