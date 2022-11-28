@@ -1,8 +1,9 @@
+use anyhow::{anyhow, bail, Error, Result};
 use num_derive::FromPrimitive;
 use num_traits::FromPrimitive;
 use std::io::{self, Read, Write};
 
-#[derive(FromPrimitive)]
+#[derive(Debug, FromPrimitive)]
 enum WorkerOp {
     IsValidPath = 1,
     HasSubstitutes = 3,
@@ -58,7 +59,7 @@ const PROTOCOL_VERSION: DaemonVersion = DaemonVersion {
 const LVL_ERROR: u64 = 0;
 
 /// Signals that the daemon can send to the client.
-enum StderrSignal {
+pub enum StderrSignal {
     Next = 0x6f6c6d67,
     Read = 0x64617461,  // data needed from source
     Write = 0x64617416, // data for sink
@@ -75,13 +76,13 @@ pub struct NixReadWrite<R, W> {
 }
 
 impl<R: Read, W: Write> NixReadWrite<R, W> {
-    pub fn read_u64(&mut self) -> io::Result<u64> {
+    pub fn read_u64(&mut self) -> Result<u64> {
         let mut buf = [0u8; 8];
         self.read.read_exact(&mut buf)?;
         Ok(u64::from_le_bytes(buf))
     }
 
-    pub fn read_string(&mut self) -> io::Result<Vec<u8>> {
+    pub fn read_string(&mut self) -> Result<Vec<u8>> {
         // possible errors:
         // Unexecpted EOF
         // IO Error
@@ -101,12 +102,12 @@ impl<R: Read, W: Write> NixReadWrite<R, W> {
         Ok(buf)
     }
 
-    fn write_u64(&mut self, n: u64) -> io::Result<()> {
+    fn write_u64(&mut self, n: u64) -> Result<()> {
         self.write.write(&n.to_le_bytes())?;
         Ok(())
     }
 
-    fn write_string(&mut self, s: &[u8]) -> io::Result<()> {
+    fn write_string(&mut self, s: &[u8]) -> Result<()> {
         self.write_u64(s.len() as _)?;
         self.write.write_all(&s)?;
 
@@ -119,7 +120,7 @@ impl<R: Read, W: Write> NixReadWrite<R, W> {
         Ok(())
     }
 
-    fn read_command(&mut self) -> io::Result<()> {
+    fn read_command(&mut self) -> Result<()> {
         eprintln!("read_command");
         let op = self.read_u64()?;
         eprintln!("op: {op:x}");
@@ -163,7 +164,52 @@ impl<R: Read, W: Write> NixReadWrite<R, W> {
                     eprintln!("override: {name} = {value}");
                 }
             }
-            op => eprintln!("received worker op: {}", op as u64),
+            WorkerOp::AddTempRoot => {
+                let path = self.read_string()?;
+                eprintln!("AddTempRoot: {}", String::from_utf8_lossy(&path));
+                // TODO: implement drop for some logger rather than manually calling this
+                self.write_u64(StderrSignal::Last as u64)?; // Send startup messages to the client
+                self.write_u64(1)?;
+                self.write.flush()?;
+            }
+            WorkerOp::IsValidPath => {
+                let path = self.read_string()?;
+                eprintln!("IsValidPath: {}", String::from_utf8_lossy(&path));
+                // TODO: implement drop for some logger rather than manually calling this
+                self.write_u64(StderrSignal::Last as u64)?; // Send startup messages to the client
+                self.write_u64(true as u64)?; // if false, we get AddToStoreNar
+                self.write.flush()?;
+            }
+            WorkerOp::AddToStore => {
+                // XXX: this is the next thing to tackle, along with AddToStoreNar
+                let path = self.read_string()?;
+                eprintln!("IsValidPath: {}", String::from_utf8_lossy(&path));
+                // TODO: implement drop for some logger rather than manually calling this
+                self.write_u64(StderrSignal::Last as u64)?; // Send startup messages to the client
+                self.write_u64(true as u64)?;
+                self.write.flush()?;
+            }
+            WorkerOp::QueryPathInfo => {
+                let path = self.read_string()?;
+                eprintln!("QueryPathInfo: {}", String::from_utf8_lossy(&path));
+                // TODO: implement drop for some logger rather than manually calling this
+                self.write_u64(StderrSignal::Last as u64)?; // Send startup messages to the client
+                self.write_u64(1)?;
+                // self.write_string(&path)?; includePath is false
+                self.write_string(b"")?; // deriver
+                self.write_string(
+                    b"0000000000000000000000000000000000000000000000000000000000000000",
+                )?; // narhash
+                self.write_u64(0)?; // number of references
+                                    // write the references here
+                self.write_u64(0)?; // registrationTime
+                self.write_u64(32)?; // narSize
+                self.write_u64(true as u64)?; // ultimate (built locally?)
+                self.write_u64(0)?; // sigs (first is number of strings, which we set to 0)
+                self.write_string(b"")?; // content addressed address (empty string if input addressed)
+                self.write.flush()?;
+            }
+            op => bail!("received worker op: {:?}", op),
         }
 
         Ok(())
@@ -171,7 +217,7 @@ impl<R: Read, W: Write> NixReadWrite<R, W> {
 
     /// Process a remote nix connection.
     /// Reimplement Daemon::processConnection from nix/src/libstore/daemon.cc
-    pub fn process_connection(&mut self) -> io::Result<()> {
+    pub fn process_connection(&mut self) -> Result<()> {
         let magic = self.read_u64()?;
         if magic != WORKER_MAGIC_1 {
             eprintln!("{magic:x}");
@@ -210,7 +256,10 @@ impl<R: Read, W: Write> NixReadWrite<R, W> {
         self.write_u64(StderrSignal::Last as u64)?; // Send startup messages to the client
         self.write.flush()?;
 
-        // TODO process worker ops
+        loop {
+            // TODO process worker ops
+            self.read_command()?;
+        }
 
         Ok(())
     }

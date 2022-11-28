@@ -5,5 +5,8 @@ fn main() {
         read: std::io::stdin(),
         write: std::io::stdout(),
     };
-    rw.process_connection().unwrap();
+
+    rw.process_connection().unwrap_or_else(|e| {
+        eprintln!("{e:?}");
+    });
 }
