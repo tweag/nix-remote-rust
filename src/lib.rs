@@ -75,11 +75,62 @@ pub struct NixReadWrite<R, W> {
     pub write: W,
 }
 
+pub struct StorePathSet {
+    // TODO: in nix, they call `parseStorePath` to separate store directory from path
+    paths: Vec<Vec<u8>>,
+}
+
+pub struct ValidPathInfo {
+    path: Vec<u8>,
+}
+
+pub struct FramedData {
+    data: Vec<Vec<u8>>,
+}
+
+impl ValidPathInfo {
+    pub fn write<R: Read, W: Write>(
+        &self,
+        rw: &mut NixReadWrite<R, W>,
+        include_path: bool,
+    ) -> Result<()> {
+        if include_path {
+            rw.write_string(&self.path)?;
+        }
+        rw.write_string(b"")?; // deriver
+        rw.write_string(b"0000000000000000000000000000000000000000000000000000000000000000")?; // narhash
+        rw.write_u64(0)?; // number of references
+                          // write the references here
+        rw.write_u64(0)?; // registrationTime
+        rw.write_u64(32)?; // narSize
+        rw.write_u64(true as u64)?; // ultimate (built locally?)
+        rw.write_u64(0)?; // sigs (first is number of strings, which we set to 0)
+        rw.write_string(b"")?; // content addressed address (empty string if input addressed)
+        Ok(())
+    }
+}
+
 impl<R: Read, W: Write> NixReadWrite<R, W> {
     pub fn read_u64(&mut self) -> Result<u64> {
         let mut buf = [0u8; 8];
         self.read.read_exact(&mut buf)?;
         Ok(u64::from_le_bytes(buf))
+    }
+
+    pub fn read_bool(&mut self) -> Result<bool> {
+        self.read_u64().map(|i| i != 0)
+    }
+
+    pub fn read_framed_data(&mut self) -> Result<()> {
+        loop {
+            let len = self.read_u64()?;
+            if len == 0 {
+                break;
+            }
+            let mut buf = vec![0; len as usize];
+            self.read.read_exact(&mut buf)?;
+        }
+        Ok(())
     }
 
     pub fn read_string(&mut self) -> Result<Vec<u8>> {
@@ -100,6 +151,15 @@ impl<R: Read, W: Write> NixReadWrite<R, W> {
         }
 
         Ok(buf)
+    }
+
+    pub fn read_store_path_set(&mut self) -> Result<StorePathSet> {
+        let len = self.read_u64()?;
+        let mut ret = vec![];
+        for _ in 0..len {
+            ret.push(self.read_string()?);
+        }
+        Ok(StorePathSet { paths: ret })
     }
 
     fn write_u64(&mut self, n: u64) -> Result<()> {
@@ -181,12 +241,21 @@ impl<R: Read, W: Write> NixReadWrite<R, W> {
                 self.write.flush()?;
             }
             WorkerOp::AddToStore => {
-                // XXX: this is the next thing to tackle, along with AddToStoreNar, along with AddToStoreNar
-                let path = self.read_string()?;
-                eprintln!("IsValidPath: {}", String::from_utf8_lossy(&path));
+                let name = self.read_string()?;
+                let cam_str = self.read_string()?;
+                let refs = self.read_store_path_set()?;
+                let repair = self.read_bool()?;
+                eprintln!(
+                    "AddToStore: {} / {}",
+                    String::from_utf8_lossy(&name),
+                    String::from_utf8_lossy(&cam_str)
+                );
+                self.read_framed_data()?;
                 // TODO: implement drop for some logger rather than manually calling this
                 self.write_u64(StderrSignal::Last as u64)?; // Send startup messages to the client
-                self.write_u64(true as u64)?;
+
+                ValidPathInfo { path: name }.write(self, true)?;
+
                 self.write.flush()?;
             }
             WorkerOp::QueryPathInfo => {
@@ -195,18 +264,7 @@ impl<R: Read, W: Write> NixReadWrite<R, W> {
                 // TODO: implement drop for some logger rather than manually calling this
                 self.write_u64(StderrSignal::Last as u64)?; // Send startup messages to the client
                 self.write_u64(1)?;
-                // self.write_string(&path)?; includePath is false
-                self.write_string(b"")?; // deriver
-                self.write_string(
-                    b"0000000000000000000000000000000000000000000000000000000000000000",
-                )?; // narhash
-                self.write_u64(0)?; // number of references
-                                    // write the references here
-                self.write_u64(0)?; // registrationTime
-                self.write_u64(32)?; // narSize
-                self.write_u64(true as u64)?; // ultimate (built locally?)
-                self.write_u64(0)?; // sigs (first is number of strings, which we set to 0)
-                self.write_string(b"")?; // content addressed address (empty string if input addressed)
+                ValidPathInfo { path }.write(self, false)?;
                 self.write.flush()?;
             }
             op => bail!("received worker op: {:?}", op),
