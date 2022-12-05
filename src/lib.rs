@@ -181,7 +181,7 @@ impl<R: Read, W: Write> NixReadWrite<R, W> {
                 self.write.flush()?;
             }
             WorkerOp::AddToStore => {
-                // XXX: this is the next thing to tackle, along with AddToStoreNar
+                // XXX: this is the next thing to tackle, along with AddToStoreNar, along with AddToStoreNar
                 let path = self.read_string()?;
                 eprintln!("IsValidPath: {}", String::from_utf8_lossy(&path));
                 // TODO: implement drop for some logger rather than manually calling this
