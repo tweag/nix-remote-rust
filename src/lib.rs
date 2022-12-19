@@ -1,7 +1,11 @@
 use anyhow::{anyhow, bail, Error, Result};
 use num_derive::FromPrimitive;
 use num_traits::FromPrimitive;
+use serde::{Deserialize, Serialize};
 use std::io::{self, Read, Write};
+
+mod serialise;
+use serialise::Deserializer;
 
 #[derive(Debug, FromPrimitive)]
 enum WorkerOp {
@@ -180,6 +184,12 @@ impl<R: Read, W: Write> NixReadWrite<R, W> {
         Ok(())
     }
 
+    fn deser<'a>(&'a mut self) -> Deserializer<'a> {
+        Deserializer {
+            read: &mut self.read,
+        }
+    }
+
     fn read_command(&mut self) -> Result<()> {
         eprintln!("read_command");
         let op = self.read_u64()?;
@@ -189,6 +199,7 @@ impl<R: Read, W: Write> NixReadWrite<R, W> {
         };
 
         match op {
+            // TODO: use our new deserializer to read a SetOptions.
             WorkerOp::SetOptions => {
                 let keep_failing = self.read_u64()?;
                 let keep_going = self.read_u64()?;
@@ -321,6 +332,23 @@ impl<R: Read, W: Write> NixReadWrite<R, W> {
 
         Ok(())
     }
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct SetOptions {
+    pub keep_failing: u64,
+    pub keep_going: u64,
+    pub try_fallback: u64,
+    pub verbosity: u64,
+    pub max_build_jobs: u64,
+    pub max_silent_time: u64,
+    _use_build_hook: u64,
+    pub build_verbosity: u64,
+    _log_type: u64,
+    _print_build_trace: u64,
+    pub build_cores: u64,
+    pub use_substitutes: u64,
+    pub options: Vec<(Vec<u8>, Vec<u8>)>,
 }
 
 #[derive(Debug)]

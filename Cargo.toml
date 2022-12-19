@@ -9,3 +9,5 @@ edition = "2021"
 anyhow = { version = "1.0.66", features = ["backtrace"] }
 num-derive = "0.3.3"
 num-traits = "0.2.15"
+serde = { version = "1.0.151", features = ["serde_derive"] }
+thiserror = "1.0.38"
