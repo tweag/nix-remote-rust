@@ -1,11 +1,15 @@
 use anyhow::{anyhow, bail, Error, Result};
 use num_derive::FromPrimitive;
 use num_traits::FromPrimitive;
-use serde::{Deserialize, Serialize};
+use serde::{
+    de::{DeserializeSeed, SeqAccess, Visitor},
+    Deserialize, Serialize,
+};
+use serde_bytes::ByteBuf;
 use std::io::{self, Read, Write};
 
-mod serialise;
-use serialise::Deserializer;
+mod serialize;
+use serialize::Deserializer;
 
 #[derive(Debug, FromPrimitive)]
 enum WorkerOp {
@@ -79,17 +83,54 @@ pub struct NixReadWrite<R, W> {
     pub write: W,
 }
 
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct StorePathSet {
     // TODO: in nix, they call `parseStorePath` to separate store directory from path
-    paths: Vec<Vec<u8>>,
+    paths: Vec<ByteBuf>,
 }
 
 pub struct ValidPathInfo {
-    path: Vec<u8>,
+    path: ByteBuf,
 }
 
+#[derive(Clone, Debug, Default, Serialize)] // FIXME: Serialize
 pub struct FramedData {
-    data: Vec<Vec<u8>>,
+    data: Vec<ByteBuf>,
+}
+
+impl<'de> Deserialize<'de> for FramedData {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        struct Visit {}
+
+        impl<'de> Visitor<'de> for Visit {
+            type Value = FramedData;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+                formatter.write_str("framed data")
+            }
+
+            fn visit_seq<A: SeqAccess<'de>>(self, mut seq: A) -> Result<Self::Value, A::Error> {
+                let mut data = Vec::new();
+                loop {
+                    match seq.next_element::<ByteBuf>()? {
+                        Some(elt) if !elt.is_empty() => {
+                            data.push(elt);
+                        }
+                        _ => break,
+                    }
+                }
+                Ok(FramedData { data })
+            }
+        }
+
+        // When deserializing FramedData *we* want to be in charge of deciding when to stop.
+        // Since deserialize_seq reads the length from the stream, we use deserialize_tuple
+        // and pass a giant length so that they'll keep giving us data until we stop.
+        deserializer.deserialize_tuple(usize::MAX, Visit {})
+    }
 }
 
 impl ValidPathInfo {
@@ -161,7 +202,7 @@ impl<R: Read, W: Write> NixReadWrite<R, W> {
         let len = self.read_u64()?;
         let mut ret = vec![];
         for _ in 0..len {
-            ret.push(self.read_string()?);
+            ret.push(ByteBuf::from(self.read_string()?));
         }
         Ok(StorePathSet { paths: ret })
     }
@@ -184,12 +225,6 @@ impl<R: Read, W: Write> NixReadWrite<R, W> {
         Ok(())
     }
 
-    fn deser<'a>(&'a mut self) -> Deserializer<'a> {
-        Deserializer {
-            read: &mut self.read,
-        }
-    }
-
     fn read_command(&mut self) -> Result<()> {
         eprintln!("read_command");
         let op = self.read_u64()?;
@@ -201,42 +236,11 @@ impl<R: Read, W: Write> NixReadWrite<R, W> {
         match op {
             // TODO: use our new deserializer to read a SetOptions.
             WorkerOp::SetOptions => {
-                let keep_failing = self.read_u64()?;
-                let keep_going = self.read_u64()?;
-                let try_fallback = self.read_u64()?;
-                let verbosity = self.read_u64()?;
-                let max_build_jobs = self.read_u64()?;
-                let max_silent_time = self.read_u64()?;
-                let _use_build_hook = self.read_u64()?;
-                let verbose_build = LVL_ERROR == self.read_u64()?;
-                let _log_type = self.read_u64()?;
-                let _print_build_trace = self.read_u64()?;
-                let build_cores = self.read_u64()?;
-                let use_substitutes = self.read_u64()?;
-
-                let options = Options {
-                    keep_failing,
-                    keep_going,
-                    try_fallback,
-                    verbosity,
-                    max_build_jobs,
-                    max_silent_time,
-                    verbose_build,
-                    build_cores,
-                    use_substitutes,
-                };
-
+                let options: SetOptions = serialize::deserialize(&mut self.read)?;
                 eprintln!("{options:#?}");
-
-                let n = self.read_u64()?;
-                for _ in 0..n {
-                    let name = String::from_utf8(self.read_string()?).unwrap();
-                    let value = String::from_utf8(self.read_string()?).unwrap();
-                    eprintln!("override: {name} = {value}");
-                }
             }
             WorkerOp::AddTempRoot => {
-                let path = self.read_string()?;
+                let path: serde_bytes::ByteBuf = serialize::deserialize(&mut self.read)?;
                 eprintln!("AddTempRoot: {}", String::from_utf8_lossy(&path));
                 // TODO: implement drop for some logger rather than manually calling this
                 self.write_u64(StderrSignal::Last as u64)?; // Send startup messages to the client
@@ -252,20 +256,16 @@ impl<R: Read, W: Write> NixReadWrite<R, W> {
                 self.write.flush()?;
             }
             WorkerOp::AddToStore => {
-                let name = self.read_string()?;
-                let cam_str = self.read_string()?;
-                let refs = self.read_store_path_set()?;
-                let repair = self.read_bool()?;
-                eprintln!(
-                    "AddToStore: {} / {}",
-                    String::from_utf8_lossy(&name),
-                    String::from_utf8_lossy(&cam_str)
-                );
-                self.read_framed_data()?;
+                let add_to_store: AddToStore = serialize::deserialize(&mut self.read)?;
+                eprintln!("AddToStore: {add_to_store:?}");
+
                 // TODO: implement drop for some logger rather than manually calling this
                 self.write_u64(StderrSignal::Last as u64)?; // Send startup messages to the client
 
-                ValidPathInfo { path: name }.write(self, true)?;
+                ValidPathInfo {
+                    path: add_to_store.name,
+                }
+                .write(self, true)?;
 
                 self.write.flush()?;
             }
@@ -275,7 +275,10 @@ impl<R: Read, W: Write> NixReadWrite<R, W> {
                 // TODO: implement drop for some logger rather than manually calling this
                 self.write_u64(StderrSignal::Last as u64)?; // Send startup messages to the client
                 self.write_u64(1)?;
-                ValidPathInfo { path }.write(self, false)?;
+                ValidPathInfo {
+                    path: ByteBuf::from(path),
+                }
+                .write(self, false)?;
                 self.write.flush()?;
             }
             op => bail!("received worker op: {:?}", op),
@@ -329,8 +332,6 @@ impl<R: Read, W: Write> NixReadWrite<R, W> {
             // TODO process worker ops
             self.read_command()?;
         }
-
-        Ok(())
     }
 }
 
@@ -348,20 +349,17 @@ pub struct SetOptions {
     _print_build_trace: u64,
     pub build_cores: u64,
     pub use_substitutes: u64,
-    pub options: Vec<(Vec<u8>, Vec<u8>)>,
+    pub options: Vec<(ByteBuf, ByteBuf)>,
 }
 
-#[derive(Debug)]
-struct Options {
-    keep_failing: u64,
-    keep_going: u64,
-    try_fallback: u64,
-    verbosity: u64,
-    max_build_jobs: u64,
-    max_silent_time: u64,
-    verbose_build: bool,
-    build_cores: u64,
-    use_substitutes: u64,
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct AddToStore {
+    name: ByteBuf,
+    cam_str: ByteBuf,
+    refs: StorePathSet,
+    repair: bool,
+    // Note: this can be big, so we will eventually want to stream it.
+    framed: FramedData,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
