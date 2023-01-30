@@ -536,11 +536,22 @@ impl<'se> serde::Serializer for &mut Serializer<'se> {
     }
 
     fn serialize_str(self, v: &str) -> Result<Self::Ok, Self::Error> {
-        todo!()
+        Err(Error::WontImplement("String"))
     }
 
     fn serialize_bytes(self, v: &[u8]) -> Result<Self::Ok, Self::Error> {
-        todo!()
+        let len = v.len();
+
+        self.write.write_all(&len.to_le_bytes())?;
+        self.write.write_all(v)?;
+
+        if len % 8 > 0 {
+            let padding = 8 - len % 8;
+            let pad_buf = [0; 8];
+            self.write.write_all(&pad_buf[..padding])?;
+        };
+
+        Ok(())
     }
 
     fn serialize_none(self) -> Result<Self::Ok, Self::Error> {
@@ -596,11 +607,12 @@ impl<'se> serde::Serializer for &mut Serializer<'se> {
     }
 
     fn serialize_seq(self, len: Option<usize>) -> Result<Self::SerializeSeq, Self::Error> {
-        todo!()
+        self.serialize_u64(len.unwrap() as u64)?;
+        Ok(self)
     }
 
     fn serialize_tuple(self, len: usize) -> Result<Self::SerializeTuple, Self::Error> {
-        todo!()
+        Ok(self)
     }
 
     fn serialize_tuple_struct(
@@ -630,7 +642,7 @@ impl<'se> serde::Serializer for &mut Serializer<'se> {
         name: &'static str,
         len: usize,
     ) -> Result<Self::SerializeStruct, Self::Error> {
-        todo!()
+        Ok(self)
     }
 
     fn serialize_struct_variant(

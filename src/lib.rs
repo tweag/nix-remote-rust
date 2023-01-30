@@ -335,7 +335,7 @@ impl<R: Read, W: Write> NixReadWrite<R, W> {
     }
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 pub struct SetOptions {
     pub keep_failing: u64,
     pub keep_going: u64,
@@ -379,5 +379,42 @@ impl From<u64> for DaemonVersion {
 impl From<DaemonVersion> for u64 {
     fn from(DaemonVersion { major, minor }: DaemonVersion) -> Self {
         ((major as u64) << 8) | minor as u64
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::serialize::Serializer;
+
+    use super::*;
+
+    #[test]
+    fn test_serialize() {
+        let options = SetOptions {
+            keep_failing: 77,
+            keep_going: 77,
+            try_fallback: 77,
+            verbosity: 77,
+            max_build_jobs: 77,
+            max_silent_time: 77,
+            _use_build_hook: 77,
+            build_verbosity: 77,
+            _log_type: 77,
+            _print_build_trace: 77,
+            build_cores: 77,
+            use_substitutes: 77,
+            options: vec![(ByteBuf::from(b"buf1".to_owned()), ByteBuf::from(b"buf2".to_owned()))],
+        };
+        let mut cursor = std::io::Cursor::new(Vec::new());
+        let mut serializer = Serializer {
+            write: &mut cursor
+        };
+        options.serialize(&mut serializer).unwrap();
+
+        cursor.set_position(0);
+        let mut deserializer = Deserializer {
+            read: &mut cursor,
+        };
+        assert_eq!(options, SetOptions::deserialize(&mut deserializer).unwrap());
     }
 }
