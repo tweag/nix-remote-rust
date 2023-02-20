@@ -12,7 +12,7 @@ mod serialize;
 use serialize::Deserializer;
 
 #[derive(Debug, FromPrimitive)]
-enum WorkerOp {
+pub enum WorkerOpCode {
     IsValidPath = 1,
     HasSubstitutes = 3,
     QueryPathHash = 4,   // obsolete
@@ -58,6 +58,55 @@ enum WorkerOp {
     BuildPathsWithResults = 46,
 }
 
+#[derive(Deserialize, Serialize, Clone)]
+#[serde(transparent)]
+pub struct Path(ByteBuf);
+
+impl std::fmt::Debug for Path {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&String::from_utf8_lossy(&self.0))
+    }
+}
+
+#[derive(Debug)]
+pub enum WorkerOp {
+    IsValidPath(Path),
+    HasSubstitutes(()), // TODO
+    QueryReferrers(()), // TODO
+    AddToStore(AddToStore),
+    BuildPaths(()), // TODO
+    EnsurePath(Path),
+    AddTempRoot(Path),
+    AddIndirectRoot(()), // TODO
+    SyncWithGC(()),      // TODO
+    FindRoots(()),       // TODO
+    SetOptions(SetOptions),
+    CollectGarbage(()),             // TODO
+    QuerySubstitutablePathInfo(()), // TODO
+    QueryAllValidPaths(()),         // TODO
+    QueryFailedPaths(()),           // TODO
+    ClearFailedPaths(()),           // TODO
+    QueryPathInfo(Path),
+    QueryPathFromHashPart(()),       // TODO
+    QuerySubstitutablePathInfos(()), // TODO
+    QueryValidPaths(()),             // TODO
+    QuerySubstitutablePaths(()),     // TODO
+    QueryValidDerivers(()),          // TODO
+    OptimiseStore(()),               // TODO
+    VerifyStore(()),                 // TODO
+    BuildDerivation(()),             // TODO
+    AddSignatures(()),               // TODO
+    NarFromPath(()),                 // TODO
+    AddToStoreNar(()),               // TODO
+    QueryMissing(()),                // TODO
+    QueryDerivationOutputMap(()),    // TODO
+    RegisterDrvOutput(()),           // TODO
+    QueryRealisation(()),            // TODO
+    AddMultipleToStore(()),          // TODO
+    AddBuildLog(()),                 // TODO
+    BuildPathsWithResults(()),       // TODO
+}
+
 const WORKER_MAGIC_1: u64 = 0x6e697863;
 const WORKER_MAGIC_2: u64 = 0x6478696f;
 const PROTOCOL_VERSION: DaemonVersion = DaemonVersion {
@@ -78,9 +127,31 @@ pub enum StderrSignal {
     Result = 0x52534c54,
 }
 
+pub struct NixProxy {
+    child_in: std::process::ChildStdin,
+    child_out: std::process::ChildStdout,
+}
+
+impl NixProxy {
+    pub fn new() -> Self {
+        let mut child = std::process::Command::new("nix-daemon")
+            .arg("--stdio")
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .spawn()
+            .unwrap();
+
+        Self {
+            child_in: child.stdin.take().unwrap(),
+            child_out: child.stdout.take().unwrap(),
+        }
+    }
+}
+
 pub struct NixReadWrite<R, W> {
     pub read: R,
     pub write: W,
+    // pub proxy: NixProxy,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -90,7 +161,7 @@ pub struct StorePathSet {
 }
 
 pub struct ValidPathInfo {
-    path: ByteBuf,
+    path: Path,
 }
 
 #[derive(Clone, Debug, Default, Serialize)] // FIXME: Serialize
@@ -140,7 +211,7 @@ impl ValidPathInfo {
         include_path: bool,
     ) -> Result<()> {
         if include_path {
-            rw.write_string(&self.path)?;
+            rw.write_string(&self.path.0)?;
         }
         rw.write_string(b"")?; // deriver
         rw.write_string(b"0000000000000000000000000000000000000000000000000000000000000000")?; // narhash
@@ -156,6 +227,54 @@ impl ValidPathInfo {
 }
 
 impl<R: Read, W: Write> NixReadWrite<R, W> {
+    pub fn read_worker_op(&mut self, opcode: WorkerOpCode) -> Result<WorkerOp> {
+        macro_rules! op {
+            ($($name:ident),*) => {
+                match opcode {
+                    $(WorkerOpCode::$name => Ok(WorkerOp::$name(serialize::deserialize(&mut self.read)?))),*,
+                    op => { Err(anyhow!("unknown op code {op:?}")) }
+                }
+            };
+        }
+        op!(
+            IsValidPath,
+            HasSubstitutes,
+            QueryReferrers,
+            AddToStore,
+            BuildPaths,
+            EnsurePath,
+            AddTempRoot,
+            AddIndirectRoot,
+            SyncWithGC,
+            FindRoots,
+            SetOptions,
+            CollectGarbage,
+            QuerySubstitutablePathInfo,
+            QueryAllValidPaths,
+            QueryFailedPaths,
+            ClearFailedPaths,
+            QueryPathInfo,
+            QueryPathFromHashPart,
+            QuerySubstitutablePathInfos,
+            QueryValidPaths,
+            QuerySubstitutablePaths,
+            QueryValidDerivers,
+            OptimiseStore,
+            VerifyStore,
+            BuildDerivation,
+            AddSignatures,
+            NarFromPath,
+            AddToStoreNar,
+            QueryMissing,
+            QueryDerivationOutputMap,
+            RegisterDrvOutput,
+            QueryRealisation,
+            AddMultipleToStore,
+            AddBuildLog,
+            BuildPathsWithResults
+        )
+    }
+
     pub fn read_u64(&mut self) -> Result<u64> {
         let mut buf = [0u8; 8];
         self.read.read_exact(&mut buf)?;
@@ -225,71 +344,52 @@ impl<R: Read, W: Write> NixReadWrite<R, W> {
         Ok(())
     }
 
-    fn read_command(&mut self) -> Result<()> {
+    fn read_command(&mut self) -> Result<WorkerOp> {
         eprintln!("read_command");
         let op = self.read_u64()?;
         eprintln!("op: {op:x}");
-        let Some(op) = WorkerOp::from_u64(op) else {
+        let Some(op) = WorkerOpCode::from_u64(op) else {
             todo!("handle bad worker op");
         };
+        self.read_worker_op(op)
+    }
 
+    fn reply_command(&mut self, op: WorkerOp) -> Result<()> {
+        eprintln!("{op:#?}");
         match op {
-            // TODO: use our new deserializer to read a SetOptions.
-            WorkerOp::SetOptions => {
-                let options: SetOptions = serialize::deserialize(&mut self.read)?;
-                eprintln!("{options:#?}");
-            }
-            WorkerOp::AddTempRoot => {
-                let path: serde_bytes::ByteBuf = serialize::deserialize(&mut self.read)?;
-                eprintln!("AddTempRoot: {}", String::from_utf8_lossy(&path));
-                // TODO: implement drop for some logger rather than manually calling this
+            WorkerOp::SetOptions(_) => {}
+            WorkerOp::AddTempRoot(_path) => {
                 self.write_u64(StderrSignal::Last as u64)?; // Send startup messages to the client
                 self.write_u64(1)?;
                 self.write.flush()?;
             }
-            WorkerOp::IsValidPath => {
-                let path = self.read_string()?;
-                eprintln!("IsValidPath: {}", String::from_utf8_lossy(&path));
-                // TODO: implement drop for some logger rather than manually calling this
+            WorkerOp::IsValidPath(_path) => {
                 self.write_u64(StderrSignal::Last as u64)?; // Send startup messages to the client
-                self.write_u64(true as u64)?; // if false, we get AddToStoreNar
+                self.write_u64(true as u64)?;
                 self.write.flush()?;
             }
-            WorkerOp::AddToStore => {
-                let add_to_store: AddToStore = serialize::deserialize(&mut self.read)?;
-                eprintln!("AddToStore: {add_to_store:?}");
-
-                // TODO: implement drop for some logger rather than manually calling this
-                self.write_u64(StderrSignal::Last as u64)?; // Send startup messages to the client
-
+            WorkerOp::AddToStore(add_to_store) => {
+                self.write_u64(StderrSignal::Last as u64)?; // Send startup messages to client
                 ValidPathInfo {
                     path: add_to_store.name,
                 }
                 .write(self, true)?;
-
                 self.write.flush()?;
             }
-            WorkerOp::QueryPathInfo => {
-                let path = self.read_string()?;
-                eprintln!("QueryPathInfo: {}", String::from_utf8_lossy(&path));
-                // TODO: implement drop for some logger rather than manually calling this
+            WorkerOp::QueryPathInfo(path) => {
                 self.write_u64(StderrSignal::Last as u64)?; // Send startup messages to the client
                 self.write_u64(1)?;
-                ValidPathInfo {
-                    path: ByteBuf::from(path),
-                }
-                .write(self, false)?;
+                ValidPathInfo { path }.write(self, false)?;
                 self.write.flush()?;
             }
-            op => bail!("received worker op: {:?}", op),
+            _ => bail!("We don't know what to do"),
         }
-
         Ok(())
     }
 
     /// Process a remote nix connection.
     /// Reimplement Daemon::processConnection from nix/src/libstore/daemon.cc
-    pub fn process_connection(&mut self) -> Result<()> {
+    pub fn process_connection(&mut self, proxy_to_nix: bool) -> Result<()> {
         let magic = self.read_u64()?;
         if magic != WORKER_MAGIC_1 {
             eprintln!("{magic:x}");
@@ -330,7 +430,8 @@ impl<R: Read, W: Write> NixReadWrite<R, W> {
 
         loop {
             // TODO process worker ops
-            self.read_command()?;
+            let op = self.read_command()?;
+            self.reply_command(op)?;
         }
     }
 }
@@ -354,7 +455,7 @@ pub struct SetOptions {
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct AddToStore {
-    name: ByteBuf,
+    name: Path,
     cam_str: ByteBuf,
     refs: StorePathSet,
     repair: bool,
@@ -403,18 +504,17 @@ mod tests {
             _print_build_trace: 77,
             build_cores: 77,
             use_substitutes: 77,
-            options: vec![(ByteBuf::from(b"buf1".to_owned()), ByteBuf::from(b"buf2".to_owned()))],
+            options: vec![(
+                ByteBuf::from(b"buf1".to_owned()),
+                ByteBuf::from(b"buf2".to_owned()),
+            )],
         };
         let mut cursor = std::io::Cursor::new(Vec::new());
-        let mut serializer = Serializer {
-            write: &mut cursor
-        };
+        let mut serializer = Serializer { write: &mut cursor };
         options.serialize(&mut serializer).unwrap();
 
         cursor.set_position(0);
-        let mut deserializer = Deserializer {
-            read: &mut cursor,
-        };
+        let mut deserializer = Deserializer { read: &mut cursor };
         assert_eq!(options, SetOptions::deserialize(&mut deserializer).unwrap());
     }
 }

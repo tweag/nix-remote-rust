@@ -24,7 +24,9 @@
         devShells.default = mkShell {
           buildInputs = [
             unstablePkgs.rust-analyzer
-            rust-bin.stable.latest.default
+            rust-bin.nightly.latest.default
+            #rust-bin.stable.latest.default
+            cargo-expand
           ];
           
           shellHook = ''
