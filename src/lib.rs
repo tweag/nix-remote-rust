@@ -9,7 +9,7 @@ use serde_bytes::ByteBuf;
 use std::io::{self, Read, Write};
 
 mod serialize;
-use serialize::Deserializer;
+use serialize::{Deserializer, Serializer};
 
 #[derive(Debug, FromPrimitive)]
 pub enum WorkerOpCode {
@@ -146,12 +146,43 @@ impl NixProxy {
             child_out: child.stdout.take().unwrap(),
         }
     }
+
+    pub fn write_u64(&mut self, n: u64) -> Result<()> {
+        self.child_in.write_all(&n.to_le_bytes())?;
+        Ok(())
+    }
+
+    pub fn read_u64(&mut self) -> Result<u64> {
+        let mut buf = [0u8; 8];
+        self.child_out.read_exact(&mut buf)?;
+        Ok(u64::from_le_bytes(buf))
+    }
+
+    pub fn flush(&mut self) -> Result<()> {
+        Ok(self.child_in.flush()?)
+    }
+
+    pub fn read_string(&mut self) -> Result<Vec<u8>> {
+        let mut deserializer = Deserializer {
+            read: &mut self.child_out,
+        };
+        let bytes = ByteBuf::deserialize(&mut deserializer)?;
+        Ok(bytes.into_vec())
+    }
 }
 
 pub struct NixReadWrite<R, W> {
-    pub read: R,
-    pub write: W,
-    // pub proxy: NixProxy,
+    pub read: NixStoreRead<R>,
+    pub write: NixStoreWrite<W>,
+    pub proxy: NixProxy,
+}
+
+pub struct NixStoreRead<R> {
+    pub inner: R,
+}
+
+pub struct NixStoreWrite<W> {
+    pub inner: W,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -205,11 +236,7 @@ impl<'de> Deserialize<'de> for FramedData {
 }
 
 impl ValidPathInfo {
-    pub fn write<R: Read, W: Write>(
-        &self,
-        rw: &mut NixReadWrite<R, W>,
-        include_path: bool,
-    ) -> Result<()> {
+    pub fn write<W: Write>(&self, rw: &mut NixStoreWrite<W>, include_path: bool) -> Result<()> {
         if include_path {
             rw.write_string(&self.path.0)?;
         }
@@ -226,12 +253,65 @@ impl ValidPathInfo {
     }
 }
 
-impl<R: Read, W: Write> NixReadWrite<R, W> {
+pub fn write_worker_op<W: Write>(op: &WorkerOp, mut write: W) -> Result<()> {
+    let mut ser = Serializer { write: &mut write };
+    macro_rules! op {
+            ($($name:ident),*) => {
+                match op {
+                    $(WorkerOp::$name(inner) => {
+                        (WorkerOpCode::$name as u64).serialize(&mut ser)?;
+                        inner.serialize(&mut ser)?;
+                    },)*
+                    op => { return Err(anyhow!("unknown op code {op:?}")) }
+                }
+            };
+        }
+    op!(
+        IsValidPath,
+        HasSubstitutes,
+        QueryReferrers,
+        AddToStore,
+        BuildPaths,
+        EnsurePath,
+        AddTempRoot,
+        AddIndirectRoot,
+        SyncWithGC,
+        FindRoots,
+        SetOptions,
+        CollectGarbage,
+        QuerySubstitutablePathInfo,
+        QueryAllValidPaths,
+        QueryFailedPaths,
+        ClearFailedPaths,
+        QueryPathInfo,
+        QueryPathFromHashPart,
+        QuerySubstitutablePathInfos,
+        QueryValidPaths,
+        QuerySubstitutablePaths,
+        QueryValidDerivers,
+        OptimiseStore,
+        VerifyStore,
+        BuildDerivation,
+        AddSignatures,
+        NarFromPath,
+        AddToStoreNar,
+        QueryMissing,
+        QueryDerivationOutputMap,
+        RegisterDrvOutput,
+        QueryRealisation,
+        AddMultipleToStore,
+        AddBuildLog,
+        BuildPathsWithResults
+    );
+    Ok(())
+}
+
+impl<R: Read> NixStoreRead<R> {
     pub fn read_worker_op(&mut self, opcode: WorkerOpCode) -> Result<WorkerOp> {
         macro_rules! op {
             ($($name:ident),*) => {
                 match opcode {
-                    $(WorkerOpCode::$name => Ok(WorkerOp::$name(serialize::deserialize(&mut self.read)?))),*,
+                    $(WorkerOpCode::$name => Ok(WorkerOp::$name(serialize::deserialize(&mut self.inner)?))),*,
                     op => { Err(anyhow!("unknown op code {op:?}")) }
                 }
             };
@@ -277,7 +357,7 @@ impl<R: Read, W: Write> NixReadWrite<R, W> {
 
     pub fn read_u64(&mut self) -> Result<u64> {
         let mut buf = [0u8; 8];
-        self.read.read_exact(&mut buf)?;
+        self.inner.read_exact(&mut buf)?;
         Ok(u64::from_le_bytes(buf))
     }
 
@@ -292,7 +372,7 @@ impl<R: Read, W: Write> NixReadWrite<R, W> {
                 break;
             }
             let mut buf = vec![0; len as usize];
-            self.read.read_exact(&mut buf)?;
+            self.inner.read_exact(&mut buf)?;
         }
         Ok(())
     }
@@ -306,12 +386,12 @@ impl<R: Read, W: Write> NixReadWrite<R, W> {
 
         // FIXME don't initialize
         let mut buf = vec![0; len];
-        self.read.read_exact(&mut buf)?;
+        self.inner.read_exact(&mut buf)?;
 
         if len % 8 > 0 {
             let padding = 8 - len % 8;
             let mut pad_buf = [0; 8];
-            self.read.read_exact(&mut pad_buf[..padding])?;
+            self.inner.read_exact(&mut pad_buf[..padding])?;
         }
 
         Ok(buf)
@@ -326,32 +406,33 @@ impl<R: Read, W: Write> NixReadWrite<R, W> {
         Ok(StorePathSet { paths: ret })
     }
 
+    fn read_command(&mut self) -> Result<WorkerOp> {
+        let op = self.read_u64()?;
+        eprintln!("opcode {op:x}");
+        let Some(op) = WorkerOpCode::from_u64(op) else {
+            todo!("handle bad worker op");
+        };
+        self.read_worker_op(op)
+    }
+}
+
+impl<W: Write> NixStoreWrite<W> {
     fn write_u64(&mut self, n: u64) -> Result<()> {
-        self.write.write(&n.to_le_bytes())?;
+        self.inner.write_all(&n.to_le_bytes())?;
         Ok(())
     }
 
     fn write_string(&mut self, s: &[u8]) -> Result<()> {
         self.write_u64(s.len() as _)?;
-        self.write.write_all(&s)?;
+        self.inner.write_all(&s)?;
 
         if s.len() % 8 > 0 {
             let padding = 8 - s.len() % 8;
             let pad_buf = [0; 8];
-            self.write.write_all(&pad_buf[..padding])?;
+            self.inner.write_all(&pad_buf[..padding])?;
         }
 
         Ok(())
-    }
-
-    fn read_command(&mut self) -> Result<WorkerOp> {
-        eprintln!("read_command");
-        let op = self.read_u64()?;
-        eprintln!("op: {op:x}");
-        let Some(op) = WorkerOpCode::from_u64(op) else {
-            todo!("handle bad worker op");
-        };
-        self.read_worker_op(op)
     }
 
     fn reply_command(&mut self, op: WorkerOp) -> Result<()> {
@@ -361,12 +442,12 @@ impl<R: Read, W: Write> NixReadWrite<R, W> {
             WorkerOp::AddTempRoot(_path) => {
                 self.write_u64(StderrSignal::Last as u64)?; // Send startup messages to the client
                 self.write_u64(1)?;
-                self.write.flush()?;
+                self.inner.flush()?;
             }
             WorkerOp::IsValidPath(_path) => {
                 self.write_u64(StderrSignal::Last as u64)?; // Send startup messages to the client
                 self.write_u64(true as u64)?;
-                self.write.flush()?;
+                self.inner.flush()?;
             }
             WorkerOp::AddToStore(add_to_store) => {
                 self.write_u64(StderrSignal::Last as u64)?; // Send startup messages to client
@@ -374,34 +455,43 @@ impl<R: Read, W: Write> NixReadWrite<R, W> {
                     path: add_to_store.name,
                 }
                 .write(self, true)?;
-                self.write.flush()?;
+                self.inner.flush()?;
             }
             WorkerOp::QueryPathInfo(path) => {
                 self.write_u64(StderrSignal::Last as u64)?; // Send startup messages to the client
                 self.write_u64(1)?;
                 ValidPathInfo { path }.write(self, false)?;
-                self.write.flush()?;
+                self.inner.flush()?;
             }
             _ => bail!("We don't know what to do"),
         }
         Ok(())
     }
 
+    fn flush(&mut self) -> Result<()> {
+        Ok(self.inner.flush()?)
+    }
+}
+
+impl<R: Read, W: Write> NixReadWrite<R, W> {
     /// Process a remote nix connection.
     /// Reimplement Daemon::processConnection from nix/src/libstore/daemon.cc
-    pub fn process_connection(&mut self, proxy_to_nix: bool) -> Result<()> {
-        let magic = self.read_u64()?;
+    pub fn process_connection(&mut self, proxy_to_nix: bool) -> Result<()>
+    where
+        W: Send,
+    {
+        let magic = self.read.read_u64()?;
         if magic != WORKER_MAGIC_1 {
             eprintln!("{magic:x}");
             eprintln!("{WORKER_MAGIC_1:x}");
             todo!("handle error: protocol mismatch 1");
         }
 
-        self.write_u64(WORKER_MAGIC_2)?;
-        self.write_u64(PROTOCOL_VERSION.into())?;
+        self.write.write_u64(WORKER_MAGIC_2)?;
+        self.write.write_u64(PROTOCOL_VERSION.into())?;
         self.write.flush()?;
 
-        let client_version = self.read_u64()?;
+        let client_version = self.read.read_u64()?;
 
         if client_version < 0x10a {
             eprintln!("Client version {client_version} is too old");
@@ -414,25 +504,66 @@ impl<R: Read, W: Write> NixReadWrite<R, W> {
         let daemon_version = DaemonVersion::from(client_version);
 
         if daemon_version.minor >= 14 {
-            let _obsolete_cpu_affinity = self.read_u64()?;
+            let _obsolete_cpu_affinity = self.read.read_u64()?;
         }
 
         if daemon_version.minor >= 11 {
-            let _obsolete_reserve_space = self.read_u64()?;
+            let _obsolete_reserve_space = self.read.read_u64()?;
         }
 
         if daemon_version.minor >= 33 {
             // TODO figure out what we need to set as the version
-            self.write_string("rust-nix-bazel-0.1.0".as_bytes())?;
+            self.write.write_string("rust-nix-bazel-0.1.0".as_bytes())?;
         }
-        self.write_u64(StderrSignal::Last as u64)?; // Send startup messages to the client
+        self.write.write_u64(StderrSignal::Last as u64)?; // Send startup messages to the client
         self.write.flush()?;
 
-        loop {
-            // TODO process worker ops
-            let op = self.read_command()?;
-            self.reply_command(op)?;
+        if proxy_to_nix {
+            self.proxy.write_u64(WORKER_MAGIC_1)?;
+            self.proxy.flush()?;
+            if self.proxy.read_u64()? != WORKER_MAGIC_2 {
+                todo!("Handle proxy daemon protocol mismatch");
+            }
+            if self.proxy.read_u64()? != PROTOCOL_VERSION.into() {
+                todo!("Handle proxy daemon protocol version mismatch");
+            }
+            self.proxy.write_u64(client_version)?;
+            self.proxy.write_u64(0)?; // cpu affinity
+            self.proxy.write_u64(0)?; // reserve space
+            self.proxy.flush()?;
+            let proxy_daemon_version = self.proxy.read_string()?;
+            eprintln!(
+                "Proxy daemon is: {}",
+                String::from_utf8_lossy(proxy_daemon_version.as_ref())
+            );
+            if self.proxy.read_u64()? != StderrSignal::Last as u64 {
+                todo!("Drain stderr");
+            }
         }
+
+        std::thread::scope(|scope| {
+            let write = &mut self.write.inner;
+            let read = &mut self.proxy.child_out;
+            scope.spawn(|| -> Result<()> {
+                loop {
+                    let mut buf = [0u8; 1024];
+                    let read_bytes = read.read(&mut buf).unwrap();
+                    if read_bytes > 0 {
+                        eprintln!("reply bytes {:?}", &buf[..read_bytes]);
+                    }
+                    write.write_all(&buf[..read_bytes]).unwrap();
+                    write.flush().unwrap();
+                }
+            });
+
+            loop {
+                // TODO process worker ops
+                let op = self.read.read_command().unwrap();
+                eprintln!("read op {op:?}");
+                write_worker_op(&op, &mut self.proxy.child_in).unwrap();
+                self.proxy.child_in.flush().unwrap();
+            }
+        })
     }
 }
 
