@@ -3,11 +3,13 @@ use num_derive::FromPrimitive;
 use num_traits::FromPrimitive;
 use serde::{
     de::{DeserializeSeed, SeqAccess, Visitor},
+    ser::SerializeTuple,
     Deserialize, Serialize,
 };
 use serde_bytes::ByteBuf;
 use std::io::{self, Read, Write};
 
+pub mod printing_read;
 mod serialize;
 use serialize::{Deserializer, Serializer};
 
@@ -195,44 +197,9 @@ pub struct ValidPathInfo {
     path: Path,
 }
 
-#[derive(Clone, Debug, Default, Serialize)] // FIXME: Serialize
+#[derive(Clone, Debug, Default)]
 pub struct FramedData {
     data: Vec<ByteBuf>,
-}
-
-impl<'de> Deserialize<'de> for FramedData {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        struct Visit {}
-
-        impl<'de> Visitor<'de> for Visit {
-            type Value = FramedData;
-
-            fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
-                formatter.write_str("framed data")
-            }
-
-            fn visit_seq<A: SeqAccess<'de>>(self, mut seq: A) -> Result<Self::Value, A::Error> {
-                let mut data = Vec::new();
-                loop {
-                    match seq.next_element::<ByteBuf>()? {
-                        Some(elt) if !elt.is_empty() => {
-                            data.push(elt);
-                        }
-                        _ => break,
-                    }
-                }
-                Ok(FramedData { data })
-            }
-        }
-
-        // When deserializing FramedData *we* want to be in charge of deciding when to stop.
-        // Since deserialize_seq reads the length from the stream, we use deserialize_tuple
-        // and pass a giant length so that they'll keep giving us data until we stop.
-        deserializer.deserialize_tuple(usize::MAX, Visit {})
-    }
 }
 
 impl ValidPathInfo {
@@ -303,6 +270,14 @@ pub fn write_worker_op<W: Write>(op: &WorkerOp, mut write: W) -> Result<()> {
         AddBuildLog,
         BuildPathsWithResults
     );
+    // TODO: This is horrible
+    if let WorkerOp::AddToStore(add) = op {
+        for data in &add.framed.data {
+            (data.len() as u64).serialize(&mut ser)?;
+            ser.write.write_all(data)?;
+        }
+        (0u64).serialize(&mut ser)?;
+    }
     Ok(())
 }
 
@@ -316,7 +291,7 @@ impl<R: Read> NixStoreRead<R> {
                 }
             };
         }
-        op!(
+        let op = op!(
             IsValidPath,
             HasSubstitutes,
             QueryReferrers,
@@ -352,7 +327,14 @@ impl<R: Read> NixStoreRead<R> {
             AddMultipleToStore,
             AddBuildLog,
             BuildPathsWithResults
-        )
+        )?;
+
+        if let WorkerOp::AddToStore(mut add) = op {
+            add.framed = self.read_framed_data()?;
+            Ok(WorkerOp::AddToStore(add))
+        } else {
+            Ok(op)
+        }
     }
 
     pub fn read_u64(&mut self) -> Result<u64> {
@@ -365,7 +347,8 @@ impl<R: Read> NixStoreRead<R> {
         self.read_u64().map(|i| i != 0)
     }
 
-    pub fn read_framed_data(&mut self) -> Result<()> {
+    pub fn read_framed_data(&mut self) -> Result<FramedData> {
+        let mut ret = FramedData::default();
         loop {
             let len = self.read_u64()?;
             if len == 0 {
@@ -373,8 +356,10 @@ impl<R: Read> NixStoreRead<R> {
             }
             let mut buf = vec![0; len as usize];
             self.inner.read_exact(&mut buf)?;
+            // NOTE: the buffers in framed data are *not* padded.
+            ret.data.push(ByteBuf::from(buf));
         }
-        Ok(())
+        Ok(ret)
     }
 
     pub fn read_string(&mut self) -> Result<Vec<u8>> {
@@ -432,6 +417,15 @@ impl<W: Write> NixStoreWrite<W> {
             self.inner.write_all(&pad_buf[..padding])?;
         }
 
+        Ok(())
+    }
+
+    fn write_framed_data(&mut self, framed: &FramedData) -> Result<()> {
+        for data in &framed.data {
+            self.write_u64(data.len() as u64)?;
+            self.inner.write_all(data)?;
+        }
+        self.write_u64(0)?;
         Ok(())
     }
 
@@ -557,8 +551,33 @@ impl<R: Read, W: Write> NixReadWrite<R, W> {
             });
 
             loop {
+                /*
+                let mut buf = [0u8; 1024];
+                let read_bytes = self.read.inner.read(&mut buf).unwrap();
+                if read_bytes > 0 {
+                    eprintln!("send bytes {:?}", &buf[..read_bytes]);
+                }
+                self.proxy.child_in.write_all(&buf[..read_bytes]).unwrap();
+                self.proxy.child_in.flush().unwrap();
+                */
+                let mut read = NixStoreRead {
+                    inner: printing_read::PrintingRead {
+                        buf: Vec::new(),
+                        inner: &mut self.read.inner,
+                    },
+                };
+
                 // TODO process worker ops
-                let op = self.read.read_command().unwrap();
+                let op = read.read_command().unwrap();
+
+                let mut buf = Vec::new();
+                write_worker_op(&op, &mut buf).unwrap();
+                if buf != read.inner.buf {
+                    eprintln!("mismatch!");
+                    eprintln!("{buf:?}");
+                    eprintln!("{:?}", read.inner.buf);
+                }
+
                 eprintln!("read op {op:?}");
                 write_worker_op(&op, &mut self.proxy.child_in).unwrap();
                 self.proxy.child_in.flush().unwrap();
@@ -591,6 +610,7 @@ pub struct AddToStore {
     refs: StorePathSet,
     repair: bool,
     // Note: this can be big, so we will eventually want to stream it.
+    #[serde(skip)]
     framed: FramedData,
 }
 
