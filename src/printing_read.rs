@@ -10,7 +10,7 @@ impl<R: Read> Read for PrintingRead<R> {
         eprintln!("reading up to {} bytes...", buf.len());
         let size = self.inner.read(buf)?;
         self.buf.extend_from_slice(&buf[..size]);
-        eprintln!("read {:?}", &buf[..size]);
+        //eprintln!("read {:?}", &buf[..size]);
         Ok(size)
     }
 }

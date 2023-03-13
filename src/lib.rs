@@ -1,17 +1,27 @@
-use anyhow::{anyhow, bail, Error, Result};
+use anyhow::anyhow;
 use num_derive::FromPrimitive;
 use num_traits::FromPrimitive;
-use serde::{
-    de::{DeserializeSeed, SeqAccess, Visitor},
-    ser::SerializeTuple,
-    Deserialize, Serialize,
-};
+use serde::{Deserialize, Serialize};
 use serde_bytes::ByteBuf;
 use std::io::{self, Read, Write};
 
 pub mod printing_read;
 mod serialize;
 use serialize::{Deserializer, Serializer};
+
+#[derive(Debug, thiserror::Error)]
+pub enum Error {
+    #[error("I/O error: {0}")]
+    Io(#[from] std::io::Error),
+
+    #[error("(De)serialization error: {0}")]
+    Deser(#[from] serialize::Error),
+
+    #[error("Other error: {0}")]
+    Other(#[from] anyhow::Error),
+}
+
+pub type Result<T> = std::result::Result<T, Error>;
 
 #[derive(Debug, FromPrimitive)]
 pub enum WorkerOpCode {
@@ -73,40 +83,40 @@ impl std::fmt::Debug for Path {
 #[derive(Debug)]
 pub enum WorkerOp {
     IsValidPath(Path),
-    HasSubstitutes(()), // TODO
-    QueryReferrers(()), // TODO
+    HasSubstitutes(Todo),
+    QueryReferrers(Todo),
     AddToStore(AddToStore),
-    BuildPaths(()), // TODO
+    BuildPaths(Todo),
     EnsurePath(Path),
     AddTempRoot(Path),
-    AddIndirectRoot(()), // TODO
-    SyncWithGC(()),      // TODO
-    FindRoots(()),       // TODO
+    AddIndirectRoot(Todo),
+    SyncWithGC(Todo),
+    FindRoots(Todo),
     SetOptions(SetOptions),
-    CollectGarbage(()),             // TODO
-    QuerySubstitutablePathInfo(()), // TODO
-    QueryAllValidPaths(()),         // TODO
-    QueryFailedPaths(()),           // TODO
-    ClearFailedPaths(()),           // TODO
+    CollectGarbage(Todo),
+    QuerySubstitutablePathInfo(Todo),
+    QueryAllValidPaths(Todo),
+    QueryFailedPaths(Todo),
+    ClearFailedPaths(Todo),
     QueryPathInfo(Path),
-    QueryPathFromHashPart(()),       // TODO
-    QuerySubstitutablePathInfos(()), // TODO
-    QueryValidPaths(()),             // TODO
-    QuerySubstitutablePaths(()),     // TODO
-    QueryValidDerivers(()),          // TODO
-    OptimiseStore(()),               // TODO
-    VerifyStore(()),                 // TODO
-    BuildDerivation(()),             // TODO
-    AddSignatures(()),               // TODO
-    NarFromPath(()),                 // TODO
-    AddToStoreNar(()),               // TODO
-    QueryMissing(()),                // TODO
-    QueryDerivationOutputMap(()),    // TODO
-    RegisterDrvOutput(()),           // TODO
-    QueryRealisation(()),            // TODO
-    AddMultipleToStore(()),          // TODO
-    AddBuildLog(()),                 // TODO
-    BuildPathsWithResults(()),       // TODO
+    QueryPathFromHashPart(Todo),
+    QuerySubstitutablePathInfos(Todo),
+    QueryValidPaths(Todo),
+    QuerySubstitutablePaths(Todo),
+    QueryValidDerivers(Todo),
+    OptimiseStore(Todo),
+    VerifyStore(Todo),
+    BuildDerivation(Todo),
+    AddSignatures(Todo),
+    NarFromPath(Todo),
+    AddToStoreNar(Todo),
+    QueryMissing(QueryMissing),
+    QueryDerivationOutputMap(Todo),
+    RegisterDrvOutput(Todo),
+    QueryRealisation(Todo),
+    AddMultipleToStore(Todo),
+    AddBuildLog(Todo),
+    BuildPathsWithResults(BuildPathsWithResults),
 }
 
 const WORKER_MAGIC_1: u64 = 0x6e697863;
@@ -190,16 +200,22 @@ pub struct NixStoreWrite<W> {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct StorePathSet {
     // TODO: in nix, they call `parseStorePath` to separate store directory from path
-    paths: Vec<ByteBuf>,
+    paths: Vec<Path>,
 }
 
 pub struct ValidPathInfo {
     path: Path,
 }
 
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Default)]
 pub struct FramedData {
     data: Vec<ByteBuf>,
+}
+
+impl std::fmt::Debug for FramedData {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("FramedData").finish_non_exhaustive()
+    }
 }
 
 impl ValidPathInfo {
@@ -229,7 +245,7 @@ pub fn write_worker_op<W: Write>(op: &WorkerOp, mut write: W) -> Result<()> {
                         (WorkerOpCode::$name as u64).serialize(&mut ser)?;
                         inner.serialize(&mut ser)?;
                     },)*
-                    op => { return Err(anyhow!("unknown op code {op:?}")) }
+                    op => { return Err(anyhow!("unknown op code {op:?}").into()) }
                 }
             };
         }
@@ -337,14 +353,10 @@ impl<R: Read> NixStoreRead<R> {
         }
     }
 
-    pub fn read_u64(&mut self) -> Result<u64> {
+    pub fn read_u64(&mut self) -> io::Result<u64> {
         let mut buf = [0u8; 8];
         self.inner.read_exact(&mut buf)?;
         Ok(u64::from_le_bytes(buf))
-    }
-
-    pub fn read_bool(&mut self) -> Result<bool> {
-        self.read_u64().map(|i| i != 0)
     }
 
     pub fn read_framed_data(&mut self) -> Result<FramedData> {
@@ -360,35 +372,6 @@ impl<R: Read> NixStoreRead<R> {
             ret.data.push(ByteBuf::from(buf));
         }
         Ok(ret)
-    }
-
-    pub fn read_string(&mut self) -> Result<Vec<u8>> {
-        // possible errors:
-        // Unexecpted EOF
-        // IO Error
-        // out of memory
-        let len = self.read_u64()? as usize;
-
-        // FIXME don't initialize
-        let mut buf = vec![0; len];
-        self.inner.read_exact(&mut buf)?;
-
-        if len % 8 > 0 {
-            let padding = 8 - len % 8;
-            let mut pad_buf = [0; 8];
-            self.inner.read_exact(&mut pad_buf[..padding])?;
-        }
-
-        Ok(buf)
-    }
-
-    pub fn read_store_path_set(&mut self) -> Result<StorePathSet> {
-        let len = self.read_u64()?;
-        let mut ret = vec![];
-        for _ in 0..len {
-            ret.push(ByteBuf::from(self.read_string()?));
-        }
-        Ok(StorePathSet { paths: ret })
     }
 
     fn read_command(&mut self) -> Result<WorkerOp> {
@@ -426,39 +409,6 @@ impl<W: Write> NixStoreWrite<W> {
             self.inner.write_all(data)?;
         }
         self.write_u64(0)?;
-        Ok(())
-    }
-
-    fn reply_command(&mut self, op: WorkerOp) -> Result<()> {
-        eprintln!("{op:#?}");
-        match op {
-            WorkerOp::SetOptions(_) => {}
-            WorkerOp::AddTempRoot(_path) => {
-                self.write_u64(StderrSignal::Last as u64)?; // Send startup messages to the client
-                self.write_u64(1)?;
-                self.inner.flush()?;
-            }
-            WorkerOp::IsValidPath(_path) => {
-                self.write_u64(StderrSignal::Last as u64)?; // Send startup messages to the client
-                self.write_u64(true as u64)?;
-                self.inner.flush()?;
-            }
-            WorkerOp::AddToStore(add_to_store) => {
-                self.write_u64(StderrSignal::Last as u64)?; // Send startup messages to client
-                ValidPathInfo {
-                    path: add_to_store.name,
-                }
-                .write(self, true)?;
-                self.inner.flush()?;
-            }
-            WorkerOp::QueryPathInfo(path) => {
-                self.write_u64(StderrSignal::Last as u64)?; // Send startup messages to the client
-                self.write_u64(1)?;
-                ValidPathInfo { path }.write(self, false)?;
-                self.inner.flush()?;
-            }
-            _ => bail!("We don't know what to do"),
-        }
         Ok(())
     }
 
@@ -542,9 +492,6 @@ impl<R: Read, W: Write> NixReadWrite<R, W> {
                 loop {
                     let mut buf = [0u8; 1024];
                     let read_bytes = read.read(&mut buf).unwrap();
-                    if read_bytes > 0 {
-                        eprintln!("reply bytes {:?}", &buf[..read_bytes]);
-                    }
                     write.write_all(&buf[..read_bytes]).unwrap();
                     write.flush().unwrap();
                 }
@@ -568,7 +515,13 @@ impl<R: Read, W: Write> NixReadWrite<R, W> {
                 };
 
                 // TODO process worker ops
-                let op = read.read_command().unwrap();
+                let op = match read.read_command() {
+                    Err(Error::Io(e)) if e.kind() == std::io::ErrorKind::UnexpectedEof => {
+                        eprintln!("EOF, closing");
+                        break;
+                    }
+                    x => x,
+                }?;
 
                 let mut buf = Vec::new();
                 write_worker_op(&op, &mut buf).unwrap();
@@ -576,12 +529,14 @@ impl<R: Read, W: Write> NixReadWrite<R, W> {
                     eprintln!("mismatch!");
                     eprintln!("{buf:?}");
                     eprintln!("{:?}", read.inner.buf);
+                    panic!();
                 }
 
                 eprintln!("read op {op:?}");
                 write_worker_op(&op, &mut self.proxy.child_in).unwrap();
                 self.proxy.child_in.flush().unwrap();
             }
+            Ok(())
         })
     }
 }
@@ -606,12 +561,36 @@ pub struct SetOptions {
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct AddToStore {
     name: Path,
-    cam_str: ByteBuf,
+    cam_str: Path,
     refs: StorePathSet,
     repair: bool,
     // Note: this can be big, so we will eventually want to stream it.
     #[serde(skip)]
     framed: FramedData,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct BuildPathsWithResults {
+    paths: Vec<Path>,
+    // TODO: make this an enum
+    build_mode: u64,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct QueryMissing {
+    paths: Vec<Path>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct Todo {}
+
+impl<'de> Deserialize<'de> for Todo {
+    fn deserialize<D>(_deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        todo!()
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
