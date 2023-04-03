@@ -81,42 +81,79 @@ impl std::fmt::Debug for Path {
 }
 
 #[derive(Debug)]
+pub struct Resp<T> {
+    marker: std::marker::PhantomData<T>,
+}
+
+impl<T> Resp<T> {
+    fn new() -> Resp<T> {
+        Resp {
+            marker: std::marker::PhantomData,
+        }
+    }
+}
+
+#[derive(Debug)]
 pub enum WorkerOp {
-    IsValidPath(Path),
-    HasSubstitutes(Todo),
-    QueryReferrers(Todo),
-    AddToStore(AddToStore),
-    BuildPaths(Todo),
-    EnsurePath(Path),
-    AddTempRoot(Path),
-    AddIndirectRoot(Todo),
-    SyncWithGC(Todo),
-    FindRoots(Todo),
-    SetOptions(SetOptions),
-    CollectGarbage(Todo),
-    QuerySubstitutablePathInfo(Todo),
-    QueryAllValidPaths(Todo),
-    QueryFailedPaths(Todo),
-    ClearFailedPaths(Todo),
-    QueryPathInfo(Path),
-    QueryPathFromHashPart(Todo),
-    QuerySubstitutablePathInfos(Todo),
-    QueryValidPaths(Todo),
-    QuerySubstitutablePaths(Todo),
-    QueryValidDerivers(Todo),
-    OptimiseStore(Todo),
-    VerifyStore(Todo),
-    BuildDerivation(Todo),
-    AddSignatures(Todo),
-    NarFromPath(Todo),
-    AddToStoreNar(Todo),
-    QueryMissing(QueryMissing),
-    QueryDerivationOutputMap(Todo),
-    RegisterDrvOutput(Todo),
-    QueryRealisation(Todo),
-    AddMultipleToStore(Todo),
-    AddBuildLog(Todo),
-    BuildPathsWithResults(BuildPathsWithResults),
+    IsValidPath(Path, Resp<bool>),
+    HasSubstitutes(Todo, Resp<Todo>),
+    QueryReferrers(Todo, Resp<Todo>),
+    AddToStore(AddToStore, Resp<Todo>),
+    BuildPaths(Todo, Resp<Todo>),
+    EnsurePath(Path, Resp<Todo>),
+    AddTempRoot(Path, Resp<Todo>),
+    AddIndirectRoot(Todo, Resp<Todo>),
+    SyncWithGC(Todo, Resp<Todo>),
+    FindRoots(Todo, Resp<Todo>),
+    SetOptions(SetOptions, Resp<()>),
+    CollectGarbage(Todo, Resp<Todo>),
+    QuerySubstitutablePathInfo(Todo, Resp<Todo>),
+    QueryAllValidPaths(Todo, Resp<Todo>),
+    QueryFailedPaths(Todo, Resp<Todo>),
+    ClearFailedPaths(Todo, Resp<Todo>),
+    QueryPathInfo(Path, Resp<QueryPathInfoResponse>),
+    QueryPathFromHashPart(Todo, Resp<Todo>),
+    QuerySubstitutablePathInfos(Todo, Resp<Todo>),
+    QueryValidPaths(Todo, Resp<Todo>),
+    QuerySubstitutablePaths(Todo, Resp<Todo>),
+    QueryValidDerivers(Todo, Resp<Todo>),
+    OptimiseStore(Todo, Resp<Todo>),
+    VerifyStore(Todo, Resp<Todo>),
+    BuildDerivation(Todo, Resp<Todo>),
+    AddSignatures(Todo, Resp<Todo>),
+    NarFromPath(Todo, Resp<Todo>),
+    AddToStoreNar(Todo, Resp<Todo>),
+    QueryMissing(QueryMissing, Resp<Todo>),
+    QueryDerivationOutputMap(Todo, Resp<Todo>),
+    RegisterDrvOutput(Todo, Resp<Todo>),
+    QueryRealisation(Todo, Resp<Todo>),
+    AddMultipleToStore(Todo, Resp<Todo>),
+    AddBuildLog(Todo, Resp<Todo>),
+    BuildPathsWithResults(BuildPathsWithResults, Resp<Todo>),
+}
+
+#[derive(Debug)]
+pub enum StderrMsgOpcode {
+    Write = 0x64617416,
+    // Read = 0x64617461,
+    Error = 0x63787470,
+    Next = 0x6f6c6d67,
+    StartActivity = 0x53545254,
+    StopActivity = 0x53544f50,
+    Result = 0x52534c54,
+    Last = 0x616c7473,
+}
+
+#[derive(Debug)]
+pub enum StderrMsg {
+    Write(ByteBuf),
+    // Read(),
+    Error(Todo),
+    Next(Todo),
+    StartActivity(Todo),
+    StopActivity(Todo),
+    Result(Todo),
+    Last(()),
 }
 
 const WORKER_MAGIC_1: u64 = 0x6e697863;
@@ -203,8 +240,33 @@ pub struct StorePathSet {
     paths: Vec<Path>,
 }
 
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct StringSet {
+    // TODO: in nix, they call `parseStorePath` to separate store directory from path
+    paths: Vec<ByteBuf>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct NarHash {
+    data: ByteBuf,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ValidPathInfo {
+    deriver: Path, // Can be empty
+    hash: NarHash,
+    references: StorePathSet,
+    registration_time: u64, // In seconds, since the epoch
+    nar_size: u64,
+    ultimate: bool,
+    sigs: StringSet,
+    content_address: ByteBuf, // Can be empty
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ValidPathInfoWithPath {
     path: Path,
+    info: ValidPathInfo,
 }
 
 #[derive(Clone, Default)]
@@ -218,34 +280,15 @@ impl std::fmt::Debug for FramedData {
     }
 }
 
-impl ValidPathInfo {
-    pub fn write<W: Write>(&self, rw: &mut NixStoreWrite<W>, include_path: bool) -> Result<()> {
-        if include_path {
-            rw.write_string(&self.path.0)?;
-        }
-        rw.write_string(b"")?; // deriver
-        rw.write_string(b"0000000000000000000000000000000000000000000000000000000000000000")?; // narhash
-        rw.write_u64(0)?; // number of references
-                          // write the references here
-        rw.write_u64(0)?; // registrationTime
-        rw.write_u64(32)?; // narSize
-        rw.write_u64(true as u64)?; // ultimate (built locally?)
-        rw.write_u64(0)?; // sigs (first is number of strings, which we set to 0)
-        rw.write_string(b"")?; // content addressed address (empty string if input addressed)
-        Ok(())
-    }
-}
-
 pub fn write_worker_op<W: Write>(op: &WorkerOp, mut write: W) -> Result<()> {
     let mut ser = Serializer { write: &mut write };
     macro_rules! op {
             ($($name:ident),*) => {
                 match op {
-                    $(WorkerOp::$name(inner) => {
+                    $(WorkerOp::$name(inner, _resp) => {
                         (WorkerOpCode::$name as u64).serialize(&mut ser)?;
                         inner.serialize(&mut ser)?;
                     },)*
-                    op => { return Err(anyhow!("unknown op code {op:?}").into()) }
                 }
             };
         }
@@ -287,7 +330,7 @@ pub fn write_worker_op<W: Write>(op: &WorkerOp, mut write: W) -> Result<()> {
         BuildPathsWithResults
     );
     // TODO: This is horrible
-    if let WorkerOp::AddToStore(add) = op {
+    if let WorkerOp::AddToStore(add, _resp) = op {
         for data in &add.framed.data {
             (data.len() as u64).serialize(&mut ser)?;
             ser.write.write_all(data)?;
@@ -302,7 +345,7 @@ impl<R: Read> NixStoreRead<R> {
         macro_rules! op {
             ($($name:ident),*) => {
                 match opcode {
-                    $(WorkerOpCode::$name => Ok(WorkerOp::$name(serialize::deserialize(&mut self.inner)?))),*,
+                    $(WorkerOpCode::$name => Ok(WorkerOp::$name(serialize::deserialize(&mut self.inner)?, Resp::new()))),*,
                     op => { Err(anyhow!("unknown op code {op:?}")) }
                 }
             };
@@ -345,9 +388,9 @@ impl<R: Read> NixStoreRead<R> {
             BuildPathsWithResults
         )?;
 
-        if let WorkerOp::AddToStore(mut add) = op {
+        if let WorkerOp::AddToStore(mut add, _) = op {
             add.framed = self.read_framed_data()?;
-            Ok(WorkerOp::AddToStore(add))
+            Ok(WorkerOp::AddToStore(add, Resp::new()))
         } else {
             Ok(op)
         }
@@ -579,6 +622,12 @@ pub struct BuildPathsWithResults {
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct QueryMissing {
     paths: Vec<Path>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct QueryPathInfoResponse {
+    valid: bool,
+    path: Option<ValidPathInfo>,
 }
 
 #[derive(Debug, Clone, Serialize)]
