@@ -1,13 +1,13 @@
-use anyhow::{anyhow, bail};
+use anyhow::anyhow;
 use num_derive::FromPrimitive;
 use num_traits::FromPrimitive;
 use serde::{Deserialize, Serialize};
 use serde_bytes::ByteBuf;
-use std::io::{self, Read, Write};
+use std::io::{Read, Write};
 
 use crate::{
-    serialize::{Deserializer, Serializer},
-    FramedSource, NarHash, Path, Result, StorePathSet, StringSet,
+    serialize::{NixDeserializer, NixSerializer},
+    FramedData, NarHash, NixString, Path, Result, StorePathSet, StringSet, ValidPathInfoWithPath,
 };
 
 #[derive(Debug, FromPrimitive)]
@@ -57,6 +57,8 @@ pub enum WorkerOpCode {
     BuildPathsWithResults = 46,
 }
 
+/// A zero-sized marker type. Its job is to mark the expected response
+/// type for each worker op.
 #[derive(Debug)]
 pub struct Resp<T> {
     marker: std::marker::PhantomData<T>,
@@ -67,6 +69,10 @@ impl<T> Resp<T> {
         Resp {
             marker: std::marker::PhantomData,
         }
+    }
+
+    fn ty(&self, v: T) -> T {
+        v
     }
 }
 
@@ -89,15 +95,17 @@ impl<T> Resp<T> {
 /// ```
 ///
 /// and then just get rid of the Opcode enum above.
+///
+/// The second argument in each variant is a tag denoting the expected return value.
 #[derive(Debug)]
 pub enum WorkerOp {
     IsValidPath(Path, Resp<bool>),
     HasSubstitutes(Todo, Resp<Todo>),
     QueryReferrers(Todo, Resp<Todo>),
-    AddToStore(AddToStore, Resp<Todo>),
+    AddToStore(AddToStore, Resp<ValidPathInfoWithPath>),
     BuildPaths(Todo, Resp<Todo>),
-    EnsurePath(Path, Resp<Todo>),
-    AddTempRoot(Path, Resp<Todo>),
+    EnsurePath(Path, Resp<u64>),
+    AddTempRoot(Path, Resp<u64>),
     AddIndirectRoot(Todo, Resp<Todo>),
     SyncWithGC(Todo, Resp<Todo>),
     FindRoots(Todo, Resp<Todo>),
@@ -119,19 +127,61 @@ pub enum WorkerOp {
     AddSignatures(Todo, Resp<Todo>),
     NarFromPath(Todo, Resp<Todo>),
     AddToStoreNar(Todo, Resp<Todo>),
-    QueryMissing(QueryMissing, Resp<Todo>),
+    QueryMissing(QueryMissing, Resp<QueryMissingResponse>),
     QueryDerivationOutputMap(Todo, Resp<Todo>),
     RegisterDrvOutput(Todo, Resp<Todo>),
     QueryRealisation(Todo, Resp<Todo>),
     AddMultipleToStore(Todo, Resp<Todo>),
     AddBuildLog(Todo, Resp<Todo>),
-    BuildPathsWithResults(BuildPathsWithResults, Resp<Todo>),
+    BuildPathsWithResults(BuildPathsWithResults, Resp<Vec<BuildResult>>),
+}
+
+macro_rules! for_each_op {
+    ($macro_name:ident !) => {
+        $macro_name!(
+            IsValidPath,
+            HasSubstitutes,
+            QueryReferrers,
+            AddToStore,
+            BuildPaths,
+            EnsurePath,
+            AddTempRoot,
+            AddIndirectRoot,
+            SyncWithGC,
+            FindRoots,
+            SetOptions,
+            CollectGarbage,
+            QuerySubstitutablePathInfo,
+            QueryAllValidPaths,
+            QueryFailedPaths,
+            ClearFailedPaths,
+            QueryPathInfo,
+            QueryPathFromHashPart,
+            QuerySubstitutablePathInfos,
+            QueryValidPaths,
+            QuerySubstitutablePaths,
+            QueryValidDerivers,
+            OptimiseStore,
+            VerifyStore,
+            BuildDerivation,
+            AddSignatures,
+            NarFromPath,
+            AddToStoreNar,
+            QueryMissing,
+            QueryDerivationOutputMap,
+            RegisterDrvOutput,
+            QueryRealisation,
+            AddMultipleToStore,
+            AddBuildLog,
+            BuildPathsWithResults
+        )
+    };
 }
 
 impl WorkerOp {
     /// Reads a worker op from the wire protocol.
     pub fn read(mut r: impl Read) -> Result<Self> {
-        let mut de = Deserializer { read: &mut r };
+        let mut de = NixDeserializer { read: &mut r };
         let opcode = u64::deserialize(&mut de)?;
         let opcode = WorkerOpCode::from_u64(opcode)
             .ok_or_else(|| anyhow!("invalid worker op code {opcode}"))?;
@@ -144,47 +194,15 @@ impl WorkerOp {
                 }
             };
         }
-        let op = op!(
-            IsValidPath,
-            HasSubstitutes,
-            QueryReferrers,
-            AddToStore,
-            BuildPaths,
-            EnsurePath,
-            AddTempRoot,
-            AddIndirectRoot,
-            SyncWithGC,
-            FindRoots,
-            SetOptions,
-            CollectGarbage,
-            QuerySubstitutablePathInfo,
-            QueryAllValidPaths,
-            QueryFailedPaths,
-            ClearFailedPaths,
-            QueryPathInfo,
-            QueryPathFromHashPart,
-            QuerySubstitutablePathInfos,
-            QueryValidPaths,
-            QuerySubstitutablePaths,
-            QueryValidDerivers,
-            OptimiseStore,
-            VerifyStore,
-            BuildDerivation,
-            AddSignatures,
-            NarFromPath,
-            AddToStoreNar,
-            QueryMissing,
-            QueryDerivationOutputMap,
-            RegisterDrvOutput,
-            QueryRealisation,
-            AddMultipleToStore,
-            AddBuildLog,
-            BuildPathsWithResults
-        )?;
+        let op = for_each_op!(op!)?;
 
+        // After reading AddToStore, Nix reads from a FramedSource. Since we're
+        // temporarily putting the FramedSource in the AddToStore, read it here.
         //
+        // This will also need to be handled in AddMultipleToStore, AddToStoreNar,
+        // and AddBuildLog.
         if let WorkerOp::AddToStore(mut add, _) = op {
-            add.framed = FramedSource::read(&mut r)?;
+            add.framed = FramedData::read(&mut r)?;
             Ok(WorkerOp::AddToStore(add, Resp::new()))
         } else {
             Ok(op)
@@ -192,7 +210,7 @@ impl WorkerOp {
     }
 
     pub fn write(&self, mut write: impl Write) -> Result<()> {
-        let mut ser = Serializer { write: &mut write };
+        let mut ser = NixSerializer { write: &mut write };
         macro_rules! op {
             ($($name:ident),*) => {
                 match self {
@@ -203,47 +221,50 @@ impl WorkerOp {
                 }
             };
         }
-        op!(
-            IsValidPath,
-            HasSubstitutes,
-            QueryReferrers,
-            AddToStore,
-            BuildPaths,
-            EnsurePath,
-            AddTempRoot,
-            AddIndirectRoot,
-            SyncWithGC,
-            FindRoots,
-            SetOptions,
-            CollectGarbage,
-            QuerySubstitutablePathInfo,
-            QueryAllValidPaths,
-            QueryFailedPaths,
-            ClearFailedPaths,
-            QueryPathInfo,
-            QueryPathFromHashPart,
-            QuerySubstitutablePathInfos,
-            QueryValidPaths,
-            QuerySubstitutablePaths,
-            QueryValidDerivers,
-            OptimiseStore,
-            VerifyStore,
-            BuildDerivation,
-            AddSignatures,
-            NarFromPath,
-            AddToStoreNar,
-            QueryMissing,
-            QueryDerivationOutputMap,
-            RegisterDrvOutput,
-            QueryRealisation,
-            AddMultipleToStore,
-            AddBuildLog,
-            BuildPathsWithResults
-        );
-        // TODO: This is horrible
+
+        for_each_op!(op!);
+
+        // See the comment in WorkerOp::read
         if let WorkerOp::AddToStore(add, _resp) = self {
             add.framed.write(write)?;
         }
+        Ok(())
+    }
+
+    pub fn proxy_response(&self, mut read: impl Read, mut write: impl Write) -> Result<()> {
+        let mut logging_read = crate::printing_read::PrintingRead {
+            buf: Vec::new(),
+            inner: &mut read,
+        };
+        let mut deser = NixDeserializer {
+            read: &mut logging_read,
+        };
+        let mut ser = NixSerializer { write: &mut write };
+        let mut dbg_buf = Vec::new();
+        let mut dbg_ser = NixSerializer {
+            write: &mut dbg_buf,
+        };
+        macro_rules! respond {
+            ($($name:ident),*) => {
+                match self {
+                    $(WorkerOp::$name(_inner, resp) => {
+                        let reply = resp.ty(<_>::deserialize(&mut deser)?);
+                        eprintln!("read reply {reply:?}");
+
+                        reply.serialize(&mut dbg_ser)?;
+                        if dbg_buf != logging_read.buf {
+                            eprintln!("mismatch!");
+                            eprintln!("{dbg_buf:?}");
+                            eprintln!("{:?}", logging_read.buf);
+                            panic!();
+                        }
+                        reply.serialize(&mut ser)?;
+                    },)*
+                }
+            };
+        }
+
+        for_each_op!(respond!);
         Ok(())
     }
 }
@@ -262,7 +283,7 @@ pub struct SetOptions {
     _print_build_trace: u64,
     pub build_cores: u64,
     pub use_substitutes: u64,
-    pub options: Vec<(ByteBuf, ByteBuf)>,
+    pub options: Vec<(NixString, NixString)>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -271,9 +292,10 @@ pub struct AddToStore {
     cam_str: Path,
     refs: StorePathSet,
     repair: bool,
-    // Note: this can be big, so we will eventually want to stream it.
+    // TODO: This doesn't really belong here. It shouldn't be read as part of a
+    // worker op: it should really be streamed.
     #[serde(skip)]
-    framed: FramedSource,
+    framed: FramedData,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -290,10 +312,36 @@ pub struct QueryMissing {
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct QueryPathInfoResponse {
-    valid: bool,
     path: Option<ValidPathInfo>,
 }
 
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct QueryMissingResponse {
+    will_build: StorePathSet,
+    will_substitute: StorePathSet,
+    unknown: StorePathSet,
+    download_size: u64,
+    nar_size: u64,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct BuildResult {
+    path: NixString,
+    status: u64,
+    error_msg: NixString,
+    time_built: u64,
+    is_non_deterministic: u64,
+    start_time: u64,
+    stop_time: u64,
+    built_outputs: DrvOutputs,
+}
+
+// TODO: first NixString is a DrvOutput; second is a Realisation
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct DrvOutputs(Vec<(NixString, NixString)>);
+
+/// A struct that panics when attempting to deserialize it. For marking
+/// parts of the protocol that we haven't implemented yet.
 #[derive(Debug, Clone, Serialize)]
 pub struct Todo {}
 
@@ -320,7 +368,7 @@ pub struct ValidPathInfo {
 
 #[cfg(test)]
 mod tests {
-    use crate::{serialize::Serializer, worker_op::SetOptions};
+    use crate::{serialize::NixSerializer, worker_op::SetOptions};
 
     use super::*;
 
@@ -340,16 +388,16 @@ mod tests {
             build_cores: 77,
             use_substitutes: 77,
             options: vec![(
-                ByteBuf::from(b"buf1".to_owned()),
-                ByteBuf::from(b"buf2".to_owned()),
+                NixString(ByteBuf::from(b"buf1".to_owned())),
+                NixString(ByteBuf::from(b"buf2".to_owned())),
             )],
         };
         let mut cursor = std::io::Cursor::new(Vec::new());
-        let mut serializer = Serializer { write: &mut cursor };
+        let mut serializer = NixSerializer { write: &mut cursor };
         options.serialize(&mut serializer).unwrap();
 
         cursor.set_position(0);
-        let mut deserializer = Deserializer { read: &mut cursor };
+        let mut deserializer = NixDeserializer { read: &mut cursor };
         assert_eq!(options, SetOptions::deserialize(&mut deserializer).unwrap());
     }
 }

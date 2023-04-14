@@ -1,6 +1,4 @@
-use anyhow::{anyhow, bail};
-use num_derive::FromPrimitive;
-use num_traits::FromPrimitive;
+use anyhow::anyhow;
 use serde::{Deserialize, Serialize};
 use serde_bytes::ByteBuf;
 use std::io::{self, Read, Write};
@@ -8,14 +6,14 @@ use std::io::{self, Read, Write};
 use stderr::Opcode;
 use worker_op::ValidPathInfo;
 
-pub mod framed_source;
+pub mod framed_data;
 pub mod printing_read;
 mod serialize;
 pub mod stderr;
 pub mod worker_op;
-use serialize::{Deserializer, Serializer};
+use serialize::NixDeserializer;
 
-pub use framed_source::FramedSource;
+pub use framed_data::FramedData;
 
 use crate::worker_op::WorkerOp;
 
@@ -37,7 +35,10 @@ pub type Result<T, E = Error> = std::result::Result<T, E>;
 #[serde(transparent)]
 pub struct Path(ByteBuf);
 
-#[derive(Deserialize, Serialize, Clone, PartialEq)]
+/// Strings in the nix protocol are not necessarily UTF-8.
+///
+/// This type marks a byte buffer that's expected to be "stringy".
+#[derive(Deserialize, Serialize, Clone, PartialEq, Eq)]
 #[serde(transparent)]
 pub struct NixString(ByteBuf);
 
@@ -96,7 +97,7 @@ impl NixProxy {
     }
 
     pub fn read_string(&mut self) -> Result<Vec<u8>> {
-        let mut deserializer = Deserializer {
+        let mut deserializer = NixDeserializer {
             read: &mut self.child_out,
         };
         let bytes = ByteBuf::deserialize(&mut deserializer)?;
@@ -178,7 +179,7 @@ impl<R: Read, W: Write> NixReadWrite<R, W> {
     // the version negotiation.
     //
     // Returns the client version.
-    fn initialize(&mut self) -> Result<u64> {
+    pub fn handshake(&mut self) -> Result<u64> {
         let magic = self.read.read_u64()?;
         if magic != WORKER_MAGIC_1 {
             eprintln!("{magic:x}");
@@ -223,7 +224,7 @@ impl<R: Read, W: Write> NixReadWrite<R, W> {
     where
         W: Send,
     {
-        let client_version = self.initialize()?;
+        let client_version = self.handshake()?;
 
         if proxy_to_nix {
             self.proxy.write_u64(WORKER_MAGIC_1)?;
@@ -252,58 +253,78 @@ impl<R: Read, W: Write> NixReadWrite<R, W> {
             }
         }
 
-        std::thread::scope(|scope| {
-            let write = &mut self.write.inner;
-            let read = &mut self.proxy.child_out;
-            scope.spawn(|| -> Result<()> {
-                loop {
-                    let mut buf = [0u8; 1024];
-                    let read_bytes = read.read(&mut buf).unwrap();
-                    write.write_all(&buf[..read_bytes]).unwrap();
-                    write.flush().unwrap();
-                }
-            });
-
+        /*
+        let write = &mut self.write.inner;
+        let read = &mut self.proxy.child_out;
+        scope.spawn(|| -> Result<()> {
             loop {
-                /*
                 let mut buf = [0u8; 1024];
-                let read_bytes = self.read.inner.read(&mut buf).unwrap();
-                if read_bytes > 0 {
-                    eprintln!("send bytes {:?}", &buf[..read_bytes]);
-                }
-                self.proxy.child_in.write_all(&buf[..read_bytes]).unwrap();
-                self.proxy.child_in.flush().unwrap();
-                */
-                let mut read = NixStoreRead {
-                    inner: printing_read::PrintingRead {
-                        buf: Vec::new(),
-                        inner: &mut self.read.inner,
-                    },
-                };
-
-                let op = match WorkerOp::read(&mut read.inner) {
-                    Err(Error::Io(e)) if e.kind() == std::io::ErrorKind::UnexpectedEof => {
-                        eprintln!("EOF, closing");
-                        break;
-                    }
-                    x => x,
-                }?;
-
-                let mut buf = Vec::new();
-                op.write(&mut buf).unwrap();
-                if buf != read.inner.buf {
-                    eprintln!("mismatch!");
-                    eprintln!("{buf:?}");
-                    eprintln!("{:?}", read.inner.buf);
-                    panic!();
-                }
-
-                eprintln!("read op {op:?}");
-                op.write(&mut self.proxy.child_in).unwrap();
-                self.proxy.child_in.flush().unwrap();
+                let read_bytes = read.read(&mut buf).unwrap();
+                write.write_all(&buf[..read_bytes]).unwrap();
+                write.flush().unwrap();
             }
-            Ok(())
-        })
+        });
+        */
+
+        loop {
+            /*
+            let mut buf = [0u8; 1024];
+            let read_bytes = self.read.inner.read(&mut buf).unwrap();
+            if read_bytes > 0 {
+                eprintln!("send bytes {:?}", &buf[..read_bytes]);
+            }
+            self.proxy.child_in.write_all(&buf[..read_bytes]).unwrap();
+            self.proxy.child_in.flush().unwrap();
+            */
+            let mut read = NixStoreRead {
+                inner: printing_read::PrintingRead {
+                    buf: Vec::new(),
+                    inner: &mut self.read.inner,
+                },
+            };
+
+            let op = match WorkerOp::read(&mut read.inner) {
+                Err(Error::Deser(serialize::Error::Io(e)))
+                    if e.kind() == std::io::ErrorKind::UnexpectedEof =>
+                {
+                    eprintln!("EOF, closing");
+                    break;
+                }
+                x => x,
+            }?;
+
+            // Check that the re-serialization of the op we just read is equivalent
+            // to the original bytes.
+            let mut buf = Vec::new();
+            op.write(&mut buf).unwrap();
+            if buf != read.inner.buf {
+                eprintln!("mismatch!");
+                eprintln!("{buf:?}");
+                eprintln!("{:?}", read.inner.buf);
+                panic!();
+            }
+
+            eprintln!("read op {op:?}");
+            op.write(&mut self.proxy.child_in).unwrap();
+            self.proxy.child_in.flush().unwrap();
+
+            // Read back stderr messages from the remote daemon.
+            loop {
+                let msg = stderr::Msg::read(&mut self.proxy.child_out)?;
+                msg.write(&mut self.write.inner)?;
+                eprintln!("read stderr msg {msg:?}");
+                self.write.inner.flush()?;
+
+                if msg == stderr::Msg::Last(()) {
+                    break;
+                }
+            }
+
+            // Read back the actual response.
+            op.proxy_response(&mut self.proxy.child_out, &mut self.write.inner)?;
+            self.write.inner.flush()?;
+        }
+        Ok(())
     }
 }
 

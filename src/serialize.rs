@@ -1,6 +1,40 @@
+//! Serialization and deserialization for the nix remote protocol.
+//!
+//! The protocol has two primitive types: integers and byte buffers.
+//! All integers are encoded in 64 bits (little endian). I haven't seen signed integers
+//! appear in the protocol yet, but presumably they're encoded in twos complement.
+//! Byte buffers are encoded as a length (64-bit integer), followed by the bytes in the buffer.
+//! If the length of the buffer is not a multiple of 8, it is zero-padded to a multiple of
+//! 8 bytes.
+//!
+//! The Nix source parses the protocol imperatively, but there are some common patterns that
+//! we implement declaratively with the help of serde's derive macros:
+//! - structs and tuples are serialized as the concatenation of their fields
+//!   (Nix does this manually for each struct)
+//! - sequences (like `Vec`s) are serialized as a length followed by the concatenation of the
+//!   elements (Nix has functions like `readStrings` for this).
+//!
+//! So for example, the struct
+//! ```ignore
+//! pub struct BuildPathsWithResults {
+//!     paths: Vec<ByteBuf>,
+//!    build_mode: u64,
+//! }
+//! ```
+//! gets serde-derived serialization implementations that encode it as:
+//! - the number of paths (an int)
+//! - the paths concatenated together, each of which consists of
+//!    + a length (an int)
+//!    + a byte buffer of that length
+//! - the build mode (an int)
+//!
+//! Nix also has some sort of implicit "tagged union", consisting of a type tag (and integer)
+//! followed by a body. We do not yet handle this declaratively, although we should. See
+//! [`crate::WorkerOp`] for an example.
+
 use std::io::{Read, Write};
 
-use serde::{de, ser, Deserialize, Serialize};
+use serde::{de, ser, Serialize};
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
@@ -32,21 +66,18 @@ impl ser::Error for Error {
 
 type Result<T, E = Error> = std::result::Result<T, E>;
 
-pub struct Deserializer<'de> {
+/// A deserializer for the nix remote protocol.
+pub struct NixDeserializer<'de> {
     pub read: &'de mut dyn Read,
 }
 
-pub struct Serializer<'se> {
+/// A serializer for the nix remote protocol.
+pub struct NixSerializer<'se> {
     pub write: &'se mut dyn Write,
 }
 
-pub fn deserialize<'de, T: Deserialize<'de>>(read: &'de mut dyn Read) -> Result<T, Error> {
-    let mut deserializer = Deserializer { read };
-    T::deserialize(&mut deserializer)
-}
-
 struct Seq<'a, 'de: 'a> {
-    deserializer: &'a mut Deserializer<'de>,
+    deserializer: &'a mut NixDeserializer<'de>,
     len: usize,
 }
 
@@ -73,7 +104,7 @@ impl<'a, 'de: 'a> de::SeqAccess<'de> for Seq<'a, 'de> {
     }
 }
 
-impl<'de> Deserializer<'de> {
+impl<'de> NixDeserializer<'de> {
     pub fn read_u64(&mut self) -> Result<u64> {
         let mut buf = [0u8; 8];
         self.read.read_exact(&mut buf)?;
@@ -87,7 +118,7 @@ impl<'de> Deserializer<'de> {
         // out of memory
         let len = self.read_u64()? as usize;
 
-        // FIXME don't initialize
+        // TODO(optimization): don't initialize
         let mut buf = vec![0; len];
         self.read.read_exact(&mut buf)?;
 
@@ -101,7 +132,7 @@ impl<'de> Deserializer<'de> {
     }
 }
 
-impl<'de, 'a> de::Deserializer<'de> for &'a mut Deserializer<'de> {
+impl<'de, 'a> de::Deserializer<'de> for &'a mut NixDeserializer<'de> {
     type Error = Error;
 
     fn deserialize_any<V>(self, _visitor: V) -> Result<V::Value, Self::Error>
@@ -223,11 +254,16 @@ impl<'de, 'a> de::Deserializer<'de> for &'a mut Deserializer<'de> {
         visitor.visit_byte_buf(self.read_byte_buf()?)
     }
 
-    fn deserialize_option<V>(self, _visitor: V) -> Result<V::Value, Self::Error>
+    fn deserialize_option<V>(self, visitor: V) -> Result<V::Value, Self::Error>
     where
         V: de::Visitor<'de>,
     {
-        Err(Error::WontImplement("option"))
+        let tag = self.read_u64()?;
+        if tag == 1 {
+            visitor.visit_some(self)
+        } else {
+            visitor.visit_none()
+        }
     }
 
     fn deserialize_unit<V>(self, visitor: V) -> Result<V::Value, Self::Error>
@@ -341,7 +377,7 @@ impl<'de, 'a> de::Deserializer<'de> for &'a mut Deserializer<'de> {
     }
 }
 
-impl<'se> ser::SerializeSeq for &mut Serializer<'se> {
+impl<'se> ser::SerializeSeq for &mut NixSerializer<'se> {
     type Ok = ();
     type Error = Error;
 
@@ -357,7 +393,7 @@ impl<'se> ser::SerializeSeq for &mut Serializer<'se> {
     }
 }
 
-impl<'se> ser::SerializeTuple for &mut Serializer<'se> {
+impl<'se> ser::SerializeTuple for &mut NixSerializer<'se> {
     type Ok = ();
     type Error = Error;
 
@@ -373,7 +409,7 @@ impl<'se> ser::SerializeTuple for &mut Serializer<'se> {
     }
 }
 
-impl<'se> ser::SerializeTupleStruct for &mut Serializer<'se> {
+impl<'se> ser::SerializeTupleStruct for &mut NixSerializer<'se> {
     type Ok = ();
     type Error = Error;
 
@@ -389,7 +425,7 @@ impl<'se> ser::SerializeTupleStruct for &mut Serializer<'se> {
     }
 }
 
-impl<'se> ser::SerializeTupleVariant for &mut Serializer<'se> {
+impl<'se> ser::SerializeTupleVariant for &mut NixSerializer<'se> {
     type Ok = ();
     type Error = Error;
 
@@ -405,7 +441,7 @@ impl<'se> ser::SerializeTupleVariant for &mut Serializer<'se> {
     }
 }
 
-impl<'se> ser::SerializeMap for &mut Serializer<'se> {
+impl<'se> ser::SerializeMap for &mut NixSerializer<'se> {
     type Ok = ();
     type Error = Error;
 
@@ -428,7 +464,7 @@ impl<'se> ser::SerializeMap for &mut Serializer<'se> {
     }
 }
 
-impl<'se> ser::SerializeStruct for &mut Serializer<'se> {
+impl<'se> ser::SerializeStruct for &mut NixSerializer<'se> {
     type Ok = ();
     type Error = Error;
 
@@ -448,7 +484,7 @@ impl<'se> ser::SerializeStruct for &mut Serializer<'se> {
     }
 }
 
-impl<'se> ser::SerializeStructVariant for &mut Serializer<'se> {
+impl<'se> ser::SerializeStructVariant for &mut NixSerializer<'se> {
     type Ok = ();
     type Error = Error;
 
@@ -468,7 +504,7 @@ impl<'se> ser::SerializeStructVariant for &mut Serializer<'se> {
     }
 }
 
-impl<'se> serde::Serializer for &mut Serializer<'se> {
+impl<'se> serde::Serializer for &mut NixSerializer<'se> {
     type Ok = ();
 
     type Error = Error;
@@ -555,14 +591,16 @@ impl<'se> serde::Serializer for &mut Serializer<'se> {
     }
 
     fn serialize_none(self) -> Result<Self::Ok, Self::Error> {
-        Err(Error::WontImplement("None"))
+        self.write.write_all(&0u64.to_le_bytes())?;
+        Ok(())
     }
 
-    fn serialize_some<T: ?Sized>(self, _value: &T) -> Result<Self::Ok, Self::Error>
+    fn serialize_some<T: ?Sized>(self, value: &T) -> Result<Self::Ok, Self::Error>
     where
         T: Serialize,
     {
-        Err(Error::WontImplement("Some"))
+        self.write.write_all(&1u64.to_le_bytes())?;
+        value.serialize(self)
     }
 
     fn serialize_unit(self) -> Result<Self::Ok, Self::Error> {
@@ -598,12 +636,12 @@ impl<'se> serde::Serializer for &mut Serializer<'se> {
         _name: &'static str,
         _variant_index: u32,
         _variant: &'static str,
-        _value: &T,
+        value: &T,
     ) -> Result<Self::Ok, Self::Error>
     where
         T: Serialize,
     {
-        Err(Error::WontImplement("newtype variant"))
+        value.serialize(self)
     }
 
     fn serialize_seq(self, len: Option<usize>) -> Result<Self::SerializeSeq, Self::Error> {

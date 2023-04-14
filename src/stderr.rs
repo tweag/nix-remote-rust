@@ -12,7 +12,7 @@ use serde::{Deserialize, Serialize};
 use serde_bytes::ByteBuf;
 use std::io::{Read, Write};
 
-use crate::serialize::{Deserializer, Serializer};
+use crate::serialize::{NixDeserializer, NixSerializer};
 use crate::{NixString, Result};
 
 /// The different opcodes. In the nix source, they are named like STDERR_WRITE, STDERR_START_ACTIVITY, etc.
@@ -36,7 +36,7 @@ pub enum Opcode {
 ///
 /// TODO: It would be neat if we could just derive the serialize/deserialize
 /// implementations, since this is a common pattern.
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Clone, Eq)]
 pub enum Msg {
     Write(NixString),
     Error(StderrError),
@@ -50,7 +50,7 @@ pub enum Msg {
 impl Msg {
     /// Write this message out in its wire format.
     pub fn write(&self, mut write: impl Write) -> Result<()> {
-        let mut ser = Serializer { write: &mut write };
+        let mut ser = NixSerializer { write: &mut write };
         macro_rules! msg {
             ($($name:ident),*) => {
                 match self {
@@ -75,7 +75,7 @@ impl Msg {
 
     /// Read a message from its wire representation.
     pub fn read(mut read: impl Read) -> Result<Self> {
-        let mut deser = Deserializer { read: &mut read };
+        let mut deser = NixDeserializer { read: &mut read };
 
         let opcode = u64::deserialize(&mut deser)?;
         let opcode =
@@ -101,7 +101,7 @@ impl Msg {
     }
 }
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Debug, Deserialize, Serialize, Clone, PartialEq, Eq)]
 pub struct StderrError {
     typ: ByteBuf,
     level: u64,
@@ -111,7 +111,7 @@ pub struct StderrError {
     traces: Vec<Trace>,
 }
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Debug, Deserialize, Serialize, Clone, PartialEq, Eq)]
 pub struct StderrStartActivity {
     act: u64,
     lvl: u64,
@@ -121,25 +121,25 @@ pub struct StderrStartActivity {
     parent: u64,
 }
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Debug, Deserialize, Serialize, Clone, PartialEq, Eq)]
 pub struct StderrResult {
     act: u64,
     typ: u64,
     fields: LoggerFields,
 }
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Debug, Deserialize, Serialize, Clone, PartialEq, Eq)]
 struct Trace {
     have_pos: u64,
     trace: ByteBuf,
 }
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Debug, Deserialize, Serialize, Clone, PartialEq, Eq)]
 struct LoggerFields {
     fields: Vec<LoggerField>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Clone, PartialEq, Eq)]
 enum LoggerField {
     #[serde(serialize_with = "serialize_logger_u64")]
     Int(u64),
