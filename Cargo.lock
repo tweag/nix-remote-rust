@@ -191,6 +191,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "nix-remote"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "num-derive",
+ "num-traits",
+ "serde",
+ "serde_bytes",
+ "thiserror",
+]
+
+[[package]]
 name = "num-derive"
 version = "0.3.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -271,19 +284,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8856d8364d252a14d474036ea1358d63c9e6965c8e5c1885c18f73d70bff9c7b"
 dependencies = [
  "proc-macro2",
-]
-
-[[package]]
-name = "rust-nix-bazel"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "clap",
- "num-derive",
- "num-traits",
- "serde",
- "serde_bytes",
- "thiserror",
 ]
 
 [[package]]

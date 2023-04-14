@@ -1,5 +1,5 @@
 use clap::Parser;
-use rust_nix_bazel::{NixProxy, NixReadWrite, NixStoreRead, NixStoreWrite};
+use nix_remote::{NixProxy, NixReadWrite, NixStoreRead, NixStoreWrite};
 
 #[derive(Parser, Debug)]
 #[command()]
