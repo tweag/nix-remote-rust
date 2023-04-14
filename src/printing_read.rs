@@ -1,5 +1,6 @@
 use std::io::Read;
 
+/// A debugging hack, for ensuring that our serialization/deserialization is preserving the wire format exactly.
 pub struct PrintingRead<R> {
     pub buf: Vec<u8>,
     pub inner: R,
