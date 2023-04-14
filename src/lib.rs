@@ -253,29 +253,7 @@ impl<R: Read, W: Write> NixReadWrite<R, W> {
             }
         }
 
-        /*
-        let write = &mut self.write.inner;
-        let read = &mut self.proxy.child_out;
-        scope.spawn(|| -> Result<()> {
-            loop {
-                let mut buf = [0u8; 1024];
-                let read_bytes = read.read(&mut buf).unwrap();
-                write.write_all(&buf[..read_bytes]).unwrap();
-                write.flush().unwrap();
-            }
-        });
-        */
-
         loop {
-            /*
-            let mut buf = [0u8; 1024];
-            let read_bytes = self.read.inner.read(&mut buf).unwrap();
-            if read_bytes > 0 {
-                eprintln!("send bytes {:?}", &buf[..read_bytes]);
-            }
-            self.proxy.child_in.write_all(&buf[..read_bytes]).unwrap();
-            self.proxy.child_in.flush().unwrap();
-            */
             let mut read = NixStoreRead {
                 inner: printing_read::PrintingRead {
                     buf: Vec::new(),
