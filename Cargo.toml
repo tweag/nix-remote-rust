@@ -12,4 +12,5 @@ num-derive = "0.3.3"
 num-traits = "0.2.15"
 serde = { version = "1.0.151", features = ["serde_derive"] }
 serde_bytes = "0.11.8"
+tagged-serde = { version = "0.1.0", path = "tagged-serde" }
 thiserror = "1.0.38"
