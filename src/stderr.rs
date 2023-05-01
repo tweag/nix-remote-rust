@@ -7,10 +7,10 @@
 use anyhow::anyhow;
 use num_derive::FromPrimitive;
 use num_traits::FromPrimitive;
-use serde::de::{Error, SeqAccess};
 use serde::{Deserialize, Serialize};
 use serde_bytes::ByteBuf;
 use std::io::{Read, Write};
+use tagged_serde::TaggedSerde;
 
 use crate::serialize::{NixDeserializer, NixSerializer};
 use crate::{NixString, Result};
@@ -139,67 +139,10 @@ struct LoggerFields {
     fields: Vec<LoggerField>,
 }
 
-#[derive(Debug, Serialize, Clone, PartialEq, Eq)]
+#[derive(Debug, TaggedSerde, Clone, PartialEq, Eq)]
 enum LoggerField {
-    #[serde(serialize_with = "serialize_logger_u64")]
+    #[tagged_serde = 0]
     Int(u64),
-    #[serde(serialize_with = "serialize_logger_string")]
+    #[tagged_serde = 1]
     String(ByteBuf),
-}
-
-pub fn serialize_logger_u64<S>(field_number: &u64, serializer: S) -> Result<S::Ok, S::Error>
-where
-    S: serde::Serializer,
-{
-    (0u64, field_number).serialize(serializer)
-}
-
-pub fn serialize_logger_string<S>(
-    field_string: &serde_bytes::ByteBuf,
-    serializer: S,
-) -> Result<S::Ok, S::Error>
-where
-    S: serde::Serializer,
-{
-    (1u64, field_string).serialize(serializer)
-}
-
-impl<'de> Deserialize<'de> for LoggerField {
-    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        struct Visitor;
-
-        impl<'d> serde::de::Visitor<'d> for Visitor {
-            type Value = LoggerField;
-
-            fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
-                formatter.write_str("either a string or an int")
-            }
-
-            fn visit_seq<A: SeqAccess<'d>>(self, mut seq: A) -> Result<LoggerField, A::Error> {
-                let tag: u64 = seq
-                    .next_element()?
-                    .ok_or_else(|| A::Error::custom("failed to read logger field tag"))?;
-                match tag {
-                    0 => {
-                        let val: u64 = seq
-                            .next_element()?
-                            .ok_or_else(|| A::Error::custom("failed to read logger field int"))?;
-                        Ok(LoggerField::Int(val))
-                    }
-                    1 => {
-                        let val: ByteBuf = seq.next_element()?.ok_or_else(|| {
-                            A::Error::custom("failed to read logger field string")
-                        })?;
-                        Ok(LoggerField::String(val))
-                    }
-                    _ => Err(A::Error::custom("unknown logger field type")),
-                }
-            }
-        }
-
-        deserializer.deserialize_tuple(2, Visitor)
-    }
 }

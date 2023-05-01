@@ -1,11 +1,6 @@
-use std::collections::BTreeMap;
-
 use proc_macro::{self, TokenStream};
 use quote::quote;
-use syn::{
-    parse::Parse, parse_macro_input, punctuated::Punctuated, token::Enum, DeriveInput, Ident,
-    ItemEnum, LitInt, Token,
-};
+use syn::{parse_macro_input, DeriveInput};
 
 #[proc_macro_derive(TaggedSerde, attributes(tagged_serde))]
 pub fn derive(input: TokenStream) -> TokenStream {
@@ -35,7 +30,8 @@ pub fn derive(input: TokenStream) -> TokenStream {
             .expect("No enum tag found for {variant_name}");
 
         quote! {
-            #ident::#variant_name(arg) => (#tag, arg).serialize(serializer)
+            // FIXME don't hardcode u64
+            #ident::#variant_name(arg) => (#tag as u64, arg).serialize(serializer)
         }
     });
 
@@ -67,6 +63,7 @@ pub fn derive(input: TokenStream) -> TokenStream {
         }
     });
 
+    // FIXME don't hardcode u64 in the deserializer tag
     let output = quote! {
         impl ::serde::Serialize for #ident {
             fn serialize<S>(&self, serializer: S) -> ::core::result::Result<S::Ok, S::Error>
