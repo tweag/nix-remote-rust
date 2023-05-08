@@ -26,7 +26,7 @@ use tagged_serde::TaggedSerde;
 #[derive(TaggedSerde, PartialEq, Debug)]
 enum Op {
     #[tagged_serde = 5]
-    SetOptions(u64),
+    SetOptions(u64, u64),
     #[tagged_serde = 42]
     GetOptions(bool),
 }
@@ -45,11 +45,11 @@ impl Serialize for Op {
 */
 
 fn main() {
-    let op = Op::SetOptions(12);
+    let op = Op::SetOptions(12, 13);
 
     let json = serde_json::to_string(&op).unwrap();
 
-    assert_eq!(json, "[5,12]");
+    assert_eq!(json, "[5,12,13]");
 
     let new_op: Op = serde_json::from_str(&json).unwrap();
     assert_eq!(new_op, op);

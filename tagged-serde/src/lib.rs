@@ -1,6 +1,7 @@
 use proc_macro::{self, TokenStream};
+use proc_macro2::Span;
 use quote::quote;
-use syn::{parse_macro_input, DeriveInput};
+use syn::{parse_macro_input, DeriveInput, Fields, FieldsUnnamed, Ident};
 
 #[proc_macro_derive(TaggedSerde, attributes(tagged_serde))]
 pub fn derive(input: TokenStream) -> TokenStream {
@@ -8,7 +9,11 @@ pub fn derive(input: TokenStream) -> TokenStream {
     let ident = input.ident;
 
     let syn::Data::Enum(input) = input.data else {
-        panic!("not an enum");
+        // TODO: make this nice
+        return quote!{
+            compile_error!("not an enum");
+        }.into();
+        // panic!("not an enum");
     };
 
     let variants = input.variants.iter().map(|v| {
@@ -29,9 +34,21 @@ pub fn derive(input: TokenStream) -> TokenStream {
             })
             .expect("No enum tag found for {variant_name}");
 
+        let number_of_fields = if let Fields::Unnamed(FieldsUnnamed {
+            paren_token: _,
+            unnamed,
+        }) = &v.fields
+        {
+            unnamed.len()
+        } else {
+            unimplemented!()
+        };
+
+        let field_names : Vec<_> = (0..number_of_fields).map(|n| Ident::new(&format!("field{n}"), Span::call_site())).collect();
+
         quote! {
             // FIXME don't hardcode u64
-            #ident::#variant_name(arg) => (#tag as u64, arg).serialize(serializer)
+            #ident::#variant_name(#( #field_names ),*) => (#tag as u64, #( #field_names ),*).serialize(serializer)
         }
     });
 
@@ -53,12 +70,29 @@ pub fn derive(input: TokenStream) -> TokenStream {
             })
             .expect("No enum tag found for {variant_name}");
 
+        let number_of_fields = if let Fields::Unnamed(FieldsUnnamed {
+            paren_token: _,
+            unnamed,
+        }) = &v.fields
+        {
+            unnamed.len()
+        } else {
+            unimplemented!()
+        };
+
+        let variant_args: Vec<_> = (0..number_of_fields)
+            .map(|_| {
+                quote! {
+                    seq
+                        .next_element()?
+                        .ok_or_else(|| A::Error::custom("failed to read logger field int"))?
+                }
+            })
+            .collect();
+
         quote! {
             #tag => {
-                let val = seq
-                    .next_element()?
-                    .ok_or_else(|| A::Error::custom("failed to read logger field int"))?;
-                Ok(#ident::#variant_name(val))
+                Ok(#ident::#variant_name(#( #variant_args ),*))
             }
         }
     });
@@ -102,7 +136,7 @@ pub fn derive(input: TokenStream) -> TokenStream {
                     }
                 }
 
-                deserializer.deserialize_tuple(2, Visitor)
+                deserializer.deserialize_seq(Visitor)
             }
         }
     };
