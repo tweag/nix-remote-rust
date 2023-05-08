@@ -3,7 +3,6 @@ use serde::{Deserialize, Serialize};
 use serde_bytes::ByteBuf;
 use std::io::{self, Read, Write};
 
-use stderr::Opcode;
 use worker_op::ValidPathInfo;
 
 pub mod framed_data;
@@ -11,11 +10,14 @@ pub mod printing_read;
 mod serialize;
 pub mod stderr;
 pub mod worker_op;
-use serialize::NixDeserializer;
+use serialize::{NixDeserializer, NixSerializer};
 
 pub use framed_data::FramedData;
 
-use crate::worker_op::WorkerOp;
+use crate::{
+    serialize::{NixReadExt, NixWriteExt},
+    worker_op::WorkerOp,
+};
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
@@ -169,6 +171,13 @@ impl<W: Write> NixStoreWrite<W> {
         Ok(())
     }
 
+    fn write(&mut self, data: &impl Serialize) -> Result<()> {
+        data.serialize(&mut NixSerializer {
+            write: &mut self.inner,
+        })?;
+        Ok(())
+    }
+
     fn flush(&mut self) -> Result<()> {
         Ok(self.inner.flush()?)
     }
@@ -213,7 +222,6 @@ impl<R: Read, W: Write> NixReadWrite<R, W> {
         if daemon_version.minor >= 33 {
             self.write.write_string("rust-nix-bazel-0.1.0".as_bytes())?;
         }
-        self.write.write_u64(Opcode::Last as u64)?;
         self.write.flush()?;
         Ok(client_version)
     }
@@ -248,9 +256,19 @@ impl<R: Read, W: Write> NixReadWrite<R, W> {
                 "Proxy daemon is: {}",
                 String::from_utf8_lossy(proxy_daemon_version.as_ref())
             );
-            if self.proxy.read_u64()? != Opcode::Last as u64 {
-                todo!("Drain stderr");
+            // FIXME: copy-paste
+            loop {
+                let msg: stderr::Msg = self.proxy.child_out.read_nix()?;
+                self.write.inner.write_nix(&msg)?;
+                eprintln!("read stderr msg {msg:?}");
+                self.write.inner.flush()?;
+
+                if msg == stderr::Msg::Last(()) {
+                    break;
+                }
             }
+        } else {
+            self.write.write(&stderr::Msg::Last(()))?;
         }
 
         loop {
@@ -288,8 +306,8 @@ impl<R: Read, W: Write> NixReadWrite<R, W> {
 
             // Read back stderr messages from the remote daemon.
             loop {
-                let msg = stderr::Msg::read(&mut self.proxy.child_out)?;
-                msg.write(&mut self.write.inner)?;
+                let msg: stderr::Msg = self.proxy.child_out.read_nix()?;
+                self.write.inner.write_nix(&msg)?;
                 eprintln!("read stderr msg {msg:?}");
                 self.write.inner.flush()?;
 

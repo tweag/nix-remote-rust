@@ -66,6 +66,27 @@ impl ser::Error for Error {
 
 type Result<T, E = Error> = std::result::Result<T, E>;
 
+pub trait NixReadExt {
+    fn read_nix<'de, 'a: 'de, D: serde::Deserialize<'de>>(&'a mut self) -> Result<D>;
+}
+
+impl<R: Read> NixReadExt for R {
+    fn read_nix<'de, 'a: 'de, D: serde::Deserialize<'de>>(&'a mut self) -> Result<D> {
+        D::deserialize(&mut NixDeserializer { read: self })
+    }
+}
+
+pub trait NixWriteExt {
+    fn write_nix(&mut self, val: &impl Serialize) -> Result<()>;
+}
+
+impl<W: Write> NixWriteExt for W {
+    fn write_nix(&mut self, val: &impl Serialize) -> Result<()> {
+        val.serialize(&mut NixSerializer { write: self })?;
+        Ok(())
+    }
+}
+
 /// A deserializer for the nix remote protocol.
 pub struct NixDeserializer<'de> {
     pub read: &'de mut dyn Read,

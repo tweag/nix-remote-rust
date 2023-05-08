@@ -15,90 +15,29 @@ use tagged_serde::TaggedSerde;
 use crate::serialize::{NixDeserializer, NixSerializer};
 use crate::{NixString, Result};
 
-/// The different opcodes. In the nix source, they are named like STDERR_WRITE, STDERR_START_ACTIVITY, etc.
-#[derive(Debug, FromPrimitive)]
-pub enum Opcode {
-    Write = 0x64617416,
-    // STDERR_READ is... interesting. Fortunately, it appears to have been superceded by FramedSource.
-    // It is not used in the current version of the nix protocol
-    // Read = 0x64617461,
-    Error = 0x63787470,
-    Next = 0x6f6c6d67,
-    StartActivity = 0x53545254,
-    StopActivity = 0x53544f50,
-    Result = 0x52534c54,
-    Last = 0x616c7473,
-}
-
 /// The different stderr messages.
 ///
 /// On the wire, they are represented as the opcode followed by the body.
 ///
-/// TODO: It would be neat if we could just derive the serialize/deserialize
-/// implementations, since this is a common pattern.
-#[derive(Debug, PartialEq, Clone, Eq)]
+// STDERR_READ is... interesting. Fortunately, it appears to have been superceded by FramedSource.
+// It is not used in the current version of the nix protocol
+// Read = 0x64617461,
+#[derive(Debug, TaggedSerde, PartialEq, Clone, Eq)]
 pub enum Msg {
+    #[tagged_serde = 0x64617416]
     Write(NixString),
+    #[tagged_serde = 0x63787470]
     Error(StderrError),
+    #[tagged_serde = 0x6f6c6d67]
     Next(NixString),
+    #[tagged_serde = 0x53545254]
     StartActivity(StderrStartActivity),
+    #[tagged_serde = 0x53544f50]
     StopActivity(u64),
+    #[tagged_serde = 0x52534c54]
     Result(StderrResult),
+    #[tagged_serde = 0x616c7473]
     Last(()),
-}
-
-impl Msg {
-    /// Write this message out in its wire format.
-    pub fn write(&self, mut write: impl Write) -> Result<()> {
-        let mut ser = NixSerializer { write: &mut write };
-        macro_rules! msg {
-            ($($name:ident),*) => {
-                match self {
-                    $(Msg::$name(inner) => {
-                        (Opcode::$name as u64).serialize(&mut ser)?;
-                        inner.serialize(&mut ser)?;
-                    },)*
-                }
-            };
-        }
-        msg!(
-            Write,
-            Error,
-            Next,
-            StartActivity,
-            StopActivity,
-            Result,
-            Last
-        );
-        Ok(())
-    }
-
-    /// Read a message from its wire representation.
-    pub fn read(mut read: impl Read) -> Result<Self> {
-        let mut deser = NixDeserializer { read: &mut read };
-
-        let opcode = u64::deserialize(&mut deser)?;
-        let opcode =
-            Opcode::from_u64(opcode).ok_or_else(|| anyhow!("invalid stderr op code {opcode:x}"))?;
-
-        macro_rules! msg {
-            ($($name:ident),*) => {
-                match opcode {
-                    $(Opcode::$name => Ok(Msg::$name(<_>::deserialize(&mut deser)?))),*,
-                }
-            };
-        }
-
-        msg!(
-            Write,
-            Error,
-            Next,
-            StartActivity,
-            StopActivity,
-            Result,
-            Last
-        )
-    }
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone, PartialEq, Eq)]
