@@ -49,7 +49,7 @@ impl FramedData {
             (data.len() as u64).serialize(&mut ser)?;
             ser.write.write_all(data)?;
         }
-        (0 as u64).serialize(&mut ser)?;
+        0_u64.serialize(&mut ser)?;
         Ok(())
     }
 }

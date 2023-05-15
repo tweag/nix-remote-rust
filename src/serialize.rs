@@ -72,6 +72,7 @@ pub trait NixReadExt {
 
 impl<R: Read> NixReadExt for R {
     fn read_nix<'de, 'a: 'de, D: serde::Deserialize<'de>>(&'a mut self) -> Result<D> {
+        eprintln!("read nix");
         D::deserialize(&mut NixDeserializer { read: self })
     }
 }
@@ -109,6 +110,7 @@ impl<'a, 'de: 'a> de::SeqAccess<'de> for Seq<'a, 'de> {
     where
         T: de::DeserializeSeed<'de>,
     {
+        dbg!(std::any::type_name::<T>());
         if self.len > 0 {
             self.len -= 1;
             Ok(Some(de::DeserializeSeed::deserialize(
@@ -127,12 +129,14 @@ impl<'a, 'de: 'a> de::SeqAccess<'de> for Seq<'a, 'de> {
 
 impl<'de> NixDeserializer<'de> {
     pub fn read_u64(&mut self) -> Result<u64> {
+        dbg!("u64");
         let mut buf = [0u8; 8];
         self.read.read_exact(&mut buf)?;
         Ok(u64::from_le_bytes(buf))
     }
 
     pub fn read_byte_buf(&mut self) -> Result<Vec<u8>> {
+        dbg!("byte_buf");
         // possible errors:
         // Unexecpted EOF
         // IO Error
@@ -291,6 +295,7 @@ impl<'de, 'a> de::Deserializer<'de> for &'a mut NixDeserializer<'de> {
     where
         V: de::Visitor<'de>,
     {
+        eprintln!("unit");
         visitor.visit_unit()
     }
 
@@ -331,6 +336,7 @@ impl<'de, 'a> de::Deserializer<'de> for &'a mut NixDeserializer<'de> {
     where
         V: de::Visitor<'de>,
     {
+        eprintln!("tuple");
         visitor.visit_seq(Seq {
             deserializer: self,
             len,

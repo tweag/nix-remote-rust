@@ -4,63 +4,18 @@ use num_traits::FromPrimitive;
 use serde::{Deserialize, Serialize};
 use serde_bytes::ByteBuf;
 use std::io::{Read, Write};
+use tagged_serde::TaggedSerde;
 
 use crate::{
-    serialize::{NixDeserializer, NixSerializer},
+    serialize::{NixDeserializer, NixReadExt, NixSerializer, NixWriteExt},
     FramedData, NarHash, NixString, Path, Result, StorePathSet, StringSet, ValidPathInfoWithPath,
 };
 
-#[derive(Debug, FromPrimitive)]
-pub enum WorkerOpCode {
-    IsValidPath = 1,
-    HasSubstitutes = 3,
-    QueryPathHash = 4,   // obsolete
-    QueryReferences = 5, // obsolete
-    QueryReferrers = 6,
-    AddToStore = 7,
-    AddTextToStore = 8, // obsolete since 1.25, Nix 3.0. Use wopAddToStore
-    BuildPaths = 9,
-    EnsurePath = 10,
-    AddTempRoot = 11,
-    AddIndirectRoot = 12,
-    SyncWithGC = 13,
-    FindRoots = 14,
-    ExportPath = 16,   // obsolete
-    QueryDeriver = 18, // obsolete
-    SetOptions = 19,
-    CollectGarbage = 20,
-    QuerySubstitutablePathInfo = 21,
-    QueryDerivationOutputs = 22, // obsolete
-    QueryAllValidPaths = 23,
-    QueryFailedPaths = 24,
-    ClearFailedPaths = 25,
-    QueryPathInfo = 26,
-    ImportPaths = 27,                // obsolete
-    QueryDerivationOutputNames = 28, // obsolete
-    QueryPathFromHashPart = 29,
-    QuerySubstitutablePathInfos = 30,
-    QueryValidPaths = 31,
-    QuerySubstitutablePaths = 32,
-    QueryValidDerivers = 33,
-    OptimiseStore = 34,
-    VerifyStore = 35,
-    BuildDerivation = 36,
-    AddSignatures = 37,
-    NarFromPath = 38,
-    AddToStoreNar = 39,
-    QueryMissing = 40,
-    QueryDerivationOutputMap = 41,
-    RegisterDrvOutput = 42,
-    QueryRealisation = 43,
-    AddMultipleToStore = 44,
-    AddBuildLog = 45,
-    BuildPathsWithResults = 46,
-}
-
 /// A zero-sized marker type. Its job is to mark the expected response
 /// type for each worker op.
-#[derive(Debug)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct Resp<T> {
+    #[serde(skip)]
     marker: std::marker::PhantomData<T>,
 }
 
@@ -80,59 +35,78 @@ impl<T> Resp<T> {
 ///
 /// On the wire, they are represented as the opcode followed by the body.
 ///
-/// TODO: It would be neat if we could just derive the serialize/deserialize
-/// implementations, since this is a common pattern.
-/// We'd like to write this definition like:
-///
-/// ```ignore
-/// pub enum WorkerOp {
-///    #[nix_enum(tag = 1)]
-///    IsValidPath(Path, Resp<bool>),
-///    #[nix_enum(tag = 2)]
-///    HasSubstitutes(Todo, Resp<Todo>),
-/// // ...
-/// }
-/// ```
-///
-/// and then just get rid of the Opcode enum above.
-///
 /// The second argument in each variant is a tag denoting the expected return value.
-#[derive(Debug)]
+#[derive(Debug, TaggedSerde)]
 pub enum WorkerOp {
+    #[tagged_serde = 1]
     IsValidPath(Path, Resp<bool>),
+    #[tagged_serde = 3]
     HasSubstitutes(Todo, Resp<Todo>),
+    #[tagged_serde = 6]
     QueryReferrers(Todo, Resp<Todo>),
+    #[tagged_serde = 7]
     AddToStore(AddToStore, Resp<ValidPathInfoWithPath>),
+    #[tagged_serde = 9]
     BuildPaths(Todo, Resp<Todo>),
+    #[tagged_serde = 10]
     EnsurePath(Path, Resp<u64>),
+    #[tagged_serde = 11]
     AddTempRoot(Path, Resp<u64>),
+    #[tagged_serde = 12]
     AddIndirectRoot(Todo, Resp<Todo>),
+    #[tagged_serde = 13]
     SyncWithGC(Todo, Resp<Todo>),
+    #[tagged_serde = 14]
     FindRoots(Todo, Resp<Todo>),
+    #[tagged_serde = 19]
     SetOptions(SetOptions, Resp<()>),
+    #[tagged_serde = 20]
     CollectGarbage(Todo, Resp<Todo>),
+    #[tagged_serde = 21]
     QuerySubstitutablePathInfo(Todo, Resp<Todo>),
+    #[tagged_serde = 23]
     QueryAllValidPaths(Todo, Resp<Todo>),
+    #[tagged_serde = 24]
     QueryFailedPaths(Todo, Resp<Todo>),
+    #[tagged_serde = 25]
     ClearFailedPaths(Todo, Resp<Todo>),
+    #[tagged_serde = 26]
     QueryPathInfo(Path, Resp<QueryPathInfoResponse>),
+    #[tagged_serde = 29]
     QueryPathFromHashPart(Todo, Resp<Todo>),
+    #[tagged_serde = 30]
     QuerySubstitutablePathInfos(Todo, Resp<Todo>),
+    #[tagged_serde = 31]
     QueryValidPaths(Todo, Resp<Todo>),
+    #[tagged_serde = 32]
     QuerySubstitutablePaths(Todo, Resp<Todo>),
+    #[tagged_serde = 33]
     QueryValidDerivers(Todo, Resp<Todo>),
+    #[tagged_serde = 34]
     OptimiseStore(Todo, Resp<Todo>),
+    #[tagged_serde = 35]
     VerifyStore(Todo, Resp<Todo>),
+    #[tagged_serde = 36]
     BuildDerivation(Todo, Resp<Todo>),
+    #[tagged_serde = 37]
     AddSignatures(Todo, Resp<Todo>),
+    #[tagged_serde = 38]
     NarFromPath(Todo, Resp<Todo>),
+    #[tagged_serde = 39]
     AddToStoreNar(Todo, Resp<Todo>),
+    #[tagged_serde = 40]
     QueryMissing(QueryMissing, Resp<QueryMissingResponse>),
+    #[tagged_serde = 41]
     QueryDerivationOutputMap(Todo, Resp<Todo>),
+    #[tagged_serde = 42]
     RegisterDrvOutput(Todo, Resp<Todo>),
+    #[tagged_serde = 43]
     QueryRealisation(Todo, Resp<Todo>),
+    #[tagged_serde = 44]
     AddMultipleToStore(Todo, Resp<Todo>),
+    #[tagged_serde = 45]
     AddBuildLog(Todo, Resp<Todo>),
+    #[tagged_serde = 46]
     BuildPathsWithResults(BuildPathsWithResults, Resp<Vec<BuildResult>>),
 }
 
@@ -181,20 +155,7 @@ macro_rules! for_each_op {
 impl WorkerOp {
     /// Reads a worker op from the wire protocol.
     pub fn read(mut r: impl Read) -> Result<Self> {
-        let mut de = NixDeserializer { read: &mut r };
-        let opcode = u64::deserialize(&mut de)?;
-        let opcode = WorkerOpCode::from_u64(opcode)
-            .ok_or_else(|| anyhow!("invalid worker op code {opcode}"))?;
-
-        macro_rules! op {
-            ($($name:ident),*) => {
-                match opcode {
-                    $(WorkerOpCode::$name => Ok(WorkerOp::$name(<_>::deserialize(&mut de)?, Resp::new()))),*,
-                    op => { Err(anyhow!("unknown op code {op:?}")) }
-                }
-            };
-        }
-        let op = for_each_op!(op!)?;
+        let op: WorkerOp = r.read_nix()?;
 
         // After reading AddToStore, Nix reads from a FramedSource. Since we're
         // temporarily putting the FramedSource in the AddToStore, read it here.
@@ -210,19 +171,7 @@ impl WorkerOp {
     }
 
     pub fn write(&self, mut write: impl Write) -> Result<()> {
-        let mut ser = NixSerializer { write: &mut write };
-        macro_rules! op {
-            ($($name:ident),*) => {
-                match self {
-                    $(WorkerOp::$name(inner, _resp) => {
-                        (WorkerOpCode::$name as u64).serialize(&mut ser)?;
-                        inner.serialize(&mut ser)?;
-                    },)*
-                }
-            };
-        }
-
-        for_each_op!(op!);
+        write.write_nix(self)?;
 
         // See the comment in WorkerOp::read
         if let WorkerOp::AddToStore(add, _resp) = self {

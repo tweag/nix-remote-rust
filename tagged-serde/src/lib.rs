@@ -136,7 +136,8 @@ pub fn derive(input: TokenStream) -> TokenStream {
                     }
                 }
 
-                deserializer.deserialize_seq(Visitor)
+                // TODO: make it a tuple with 2 fields: (tag, rest)
+                deserializer.deserialize_tuple(usize::MAX, Visitor)
             }
         }
     };

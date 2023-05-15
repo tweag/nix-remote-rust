@@ -15,6 +15,7 @@ use serialize::{NixDeserializer, NixSerializer};
 pub use framed_data::FramedData;
 
 use crate::{
+    printing_read::PrintingRead,
     serialize::{NixReadExt, NixWriteExt},
     worker_op::WorkerOp,
 };
@@ -258,7 +259,12 @@ impl<R: Read, W: Write> NixReadWrite<R, W> {
             );
             // FIXME: copy-paste
             loop {
-                let msg: stderr::Msg = self.proxy.child_out.read_nix()?;
+                eprintln!("trying to read stderr::Msg");
+                let mut r = PrintingRead {
+                    buf: Vec::new(),
+                    inner: &mut self.proxy.child_out,
+                };
+                let msg: stderr::Msg = r.read_nix()?;
                 self.write.inner.write_nix(&msg)?;
                 eprintln!("read stderr msg {msg:?}");
                 self.write.inner.flush()?;
