@@ -122,6 +122,14 @@ pub struct NixStoreWrite<W> {
     pub inner: W,
 }
 
+/// The serialization format of PathSet and StorePathSet is the same, but there's a semantic
+/// difference: these paths are not in the store.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct PathSet {
+    // TODO: in nix, they call `parseStorePath` to separate store directory from path
+    paths: Vec<Path>,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct StorePathSet {
     // TODO: in nix, they call `parseStorePath` to separate store directory from path

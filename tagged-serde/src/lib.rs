@@ -84,8 +84,8 @@ pub fn derive(input: TokenStream) -> TokenStream {
             .map(|_| {
                 quote! {
                     seq
-                        .next_element()?
-                        .ok_or_else(|| A::Error::custom("failed to read logger field int"))?
+                        .next_element().map_err(|e| A::Error::custom(format!("failed to read variant with tag {}: {}", tag, e)))?
+                        .ok_or_else(|| A::Error::custom(format!("failed to read variant with tag {}", tag)))?
                 }
             })
             .collect();

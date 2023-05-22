@@ -1,11 +1,13 @@
 use anyhow::anyhow;
 use num_derive::FromPrimitive;
 use num_traits::FromPrimitive;
+use serde::de::Error;
 use serde::{Deserialize, Serialize};
 use serde_bytes::ByteBuf;
 use std::io::{Read, Write};
 use tagged_serde::TaggedSerde;
 
+use crate::PathSet;
 use crate::{
     serialize::{NixDeserializer, NixReadExt, NixSerializer, NixWriteExt},
     FramedData, NarHash, NixString, Path, Result, StorePathSet, StringSet, ValidPathInfoWithPath,
@@ -61,7 +63,7 @@ pub enum WorkerOp {
     #[tagged_serde = 19]
     SetOptions(SetOptions, Resp<()>),
     #[tagged_serde = 20]
-    CollectGarbage(Todo, Resp<Todo>),
+    CollectGarbage(CollectGarbage, Resp<CollectGarbageResponse>),
     #[tagged_serde = 21]
     QuerySubstitutablePathInfo(Todo, Resp<Todo>),
     #[tagged_serde = 23]
@@ -289,6 +291,56 @@ pub struct BuildResult {
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct DrvOutputs(Vec<(NixString, NixString)>);
 
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct CollectGarbage {
+    action: GcAction,
+    paths_to_delete: StorePathSet,
+    ignore_liveness: bool,
+    max_freed: u64,
+    _obsolete0: u64,
+    _obsolete1: u64,
+    _obsolete2: u64,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct CollectGarbageResponse {
+    paths: PathSet,
+    bytes_freed: u64,
+    _obsolete: u64,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, Default)]
+#[repr(u64)]
+#[serde(try_from = "u64")]
+#[serde(into = "u64")]
+pub enum GcAction {
+    ReturnLive = 0,
+    ReturnDead = 1,
+    #[default]
+    DeleteDead = 2,
+    DeleteSpecific = 3,
+}
+
+impl TryFrom<u64> for GcAction {
+    type Error = &'static str;
+
+    fn try_from(value: u64) -> std::result::Result<Self, Self::Error> {
+        match value {
+            0 => Ok(GcAction::ReturnLive),
+            1 => Ok(GcAction::ReturnDead),
+            2 => Ok(GcAction::DeleteDead),
+            3 => Ok(GcAction::DeleteSpecific),
+            _ => Err("wrong number"),
+        }
+    }
+}
+
+impl From<GcAction> for u64 {
+    fn from(value: GcAction) -> Self {
+        value as _
+    }
+}
+
 /// A struct that panics when attempting to deserialize it. For marking
 /// parts of the protocol that we haven't implemented yet.
 #[derive(Debug, Clone, Serialize)]
@@ -299,7 +351,7 @@ impl<'de> Deserialize<'de> for Todo {
     where
         D: serde::Deserializer<'de>,
     {
-        todo!()
+        Err(D::Error::unknown_variant("unknown", &[]))
     }
 }
 
