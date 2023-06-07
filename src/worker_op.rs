@@ -49,7 +49,7 @@ pub enum WorkerOp {
     #[tagged_serde = 7]
     AddToStore(AddToStore, Resp<ValidPathInfoWithPath>),
     #[tagged_serde = 9]
-    BuildPaths(Todo, Resp<Todo>),
+    BuildPaths(BuildPaths, Resp<u64>),
     #[tagged_serde = 10]
     EnsurePath(Path, Resp<u64>),
     #[tagged_serde = 11]
@@ -93,13 +93,13 @@ pub enum WorkerOp {
     #[tagged_serde = 37]
     AddSignatures(Todo, Resp<Todo>),
     #[tagged_serde = 38]
-    NarFromPath(Todo, Resp<Todo>),
+    NarFromPath(Path, Resp<Nar>),
     #[tagged_serde = 39]
     AddToStoreNar(Todo, Resp<Todo>),
     #[tagged_serde = 40]
     QueryMissing(QueryMissing, Resp<QueryMissingResponse>),
     #[tagged_serde = 41]
-    QueryDerivationOutputMap(Todo, Resp<Todo>),
+    QueryDerivationOutputMap(Path, Resp<DerivationOutputMap>),
     #[tagged_serde = 42]
     RegisterDrvOutput(Todo, Resp<Todo>),
     #[tagged_serde = 43]
@@ -109,7 +109,7 @@ pub enum WorkerOp {
     #[tagged_serde = 45]
     AddBuildLog(Todo, Resp<Todo>),
     #[tagged_serde = 46]
-    BuildPathsWithResults(BuildPathsWithResults, Resp<Vec<BuildResult>>),
+    BuildPathsWithResults(BuildPaths, Resp<Vec<BuildResult>>),
 }
 
 macro_rules! for_each_op {
@@ -250,7 +250,7 @@ pub struct AddToStore {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
-pub struct BuildPathsWithResults {
+pub struct BuildPaths {
     paths: Vec<Path>,
     // TODO: make this an enum
     build_mode: u64,
@@ -300,6 +300,11 @@ pub struct CollectGarbage {
     _obsolete0: u64,
     _obsolete1: u64,
     _obsolete2: u64,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct DerivationOutputMap {
+    paths: Vec<(NixString, Path)>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -365,6 +370,31 @@ pub struct ValidPathInfo {
     ultimate: bool,
     sigs: StringSet,
     content_address: ByteBuf, // Can be empty
+}
+
+pub struct Nar {
+    entries: Vec<NarEntry>,
+}
+
+pub enum NarEntry {
+    Type(NarType),
+    Contents {
+        contents: NixString,
+        executable: bool,
+    },
+    Target(NixString),
+    Directory(Vec<NarDirectoryEntry>),
+}
+
+pub enum NarType {
+    Regular,
+    Directory,
+    Symlink,
+}
+
+pub enum NarDirectoryEntry {
+    Name(NixString),
+    Node(Nar),
 }
 
 #[cfg(test)]
