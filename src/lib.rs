@@ -6,6 +6,7 @@ use std::io::{self, Read, Write};
 use worker_op::ValidPathInfo;
 
 pub mod framed_data;
+pub mod nar;
 pub mod printing_read;
 mod serialize;
 pub mod stderr;
@@ -41,7 +42,7 @@ pub struct Path(ByteBuf);
 /// Strings in the nix protocol are not necessarily UTF-8.
 ///
 /// This type marks a byte buffer that's expected to be "stringy".
-#[derive(Deserialize, Serialize, Clone, PartialEq, Eq)]
+#[derive(Deserialize, Serialize, Clone, PartialEq, Eq, Default)]
 #[serde(transparent)]
 pub struct NixString(ByteBuf);
 

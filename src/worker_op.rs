@@ -1,12 +1,10 @@
-use anyhow::anyhow;
-use num_derive::FromPrimitive;
-use num_traits::FromPrimitive;
 use serde::de::Error;
 use serde::{Deserialize, Serialize};
 use serde_bytes::ByteBuf;
 use std::io::{Read, Write};
 use tagged_serde::TaggedSerde;
 
+use crate::nar::Nar;
 use crate::PathSet;
 use crate::{
     serialize::{NixDeserializer, NixReadExt, NixSerializer, NixWriteExt},
@@ -370,31 +368,6 @@ pub struct ValidPathInfo {
     ultimate: bool,
     sigs: StringSet,
     content_address: ByteBuf, // Can be empty
-}
-
-pub struct Nar {
-    entries: Vec<NarEntry>,
-}
-
-pub enum NarEntry {
-    Type(NarType),
-    Contents {
-        contents: NixString,
-        executable: bool,
-    },
-    Target(NixString),
-    Directory(Vec<NarDirectoryEntry>),
-}
-
-pub enum NarType {
-    Regular,
-    Directory,
-    Symlink,
-}
-
-pub enum NarDirectoryEntry {
-    Name(NixString),
-    Node(Nar),
 }
 
 #[cfg(test)]
