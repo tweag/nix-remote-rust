@@ -131,7 +131,7 @@ pub fn derive(input: TokenStream) -> TokenStream {
                             .ok_or_else(|| A::Error::custom("failed to read logger field tag"))?;
                         match tag {
                             #( #deser_variants ),*
-                            _ => Err(A::Error::custom("unknown logger field type")),
+                            _ => Err(A::Error::custom(format!("unknown tag {} when deserializing {}", tag, stringify!(#ident)))),
                         }
                     }
                 }

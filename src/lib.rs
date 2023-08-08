@@ -212,28 +212,18 @@ impl<R: Read, W: Write> NixReadWrite<R, W> {
 
         let client_version = self.read.read_u64()?;
 
-        if client_version < 0x10a {
+        if client_version < PROTOCOL_VERSION.into() {
             Err(anyhow!("Client version {client_version} is too old"))?;
         }
 
         // TODO keep track of number of WorkerOps performed
         let mut _op_count: u64 = 0;
 
-        let daemon_version = DaemonVersion::from(client_version);
-
-        if daemon_version.minor >= 14 {
-            let _obsolete_cpu_affinity = self.read.read_u64()?;
-        }
-
-        if daemon_version.minor >= 11 {
-            let _obsolete_reserve_space = self.read.read_u64()?;
-        }
-
-        if daemon_version.minor >= 33 {
-            self.write.write_string("rust-nix-bazel-0.1.0".as_bytes())?;
-        }
+        let _obsolete_cpu_affinity = self.read.read_u64()?;
+        let _obsolete_reserve_space = self.read.read_u64()?;
+        self.write.write_string("rust-nix-bazel-0.1.0".as_bytes())?;
         self.write.flush()?;
-        Ok(client_version)
+        Ok(PROTOCOL_VERSION.into())
     }
 
     /// Process a remote nix connection.
@@ -252,7 +242,7 @@ impl<R: Read, W: Write> NixReadWrite<R, W> {
                 Err(anyhow!("unexpected WORKER_MAGIC_2: got {magic:x}"))?;
             }
             let protocol_version = self.proxy.read_u64()?;
-            if protocol_version != PROTOCOL_VERSION.into() {
+            if protocol_version < PROTOCOL_VERSION.into() {
                 Err(anyhow!(
                     "unexpected protocol version: got {protocol_version}"
                 ))?;
