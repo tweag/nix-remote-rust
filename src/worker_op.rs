@@ -1,7 +1,7 @@
 use serde::de::Error;
 use serde::{Deserialize, Serialize};
 use serde_bytes::ByteBuf;
-use std::io::{Read, Write};
+use std::io::{Cursor, Read, Write};
 use tagged_serde::TaggedSerde;
 
 use crate::nar::Nar;
@@ -93,7 +93,7 @@ pub enum WorkerOp {
     #[tagged_serde = 38]
     NarFromPath(Path, Resp<Nar>),
     #[tagged_serde = 39]
-    AddToStoreNar(Todo, Resp<Todo>),
+    AddToStoreNar(AddToStoreNar, Resp<()>),
     #[tagged_serde = 40]
     QueryMissing(QueryMissing, Resp<QueryMissingResponse>),
     #[tagged_serde = 41]
@@ -162,11 +162,27 @@ impl WorkerOp {
         //
         // This will also need to be handled in AddMultipleToStore, AddToStoreNar,
         // and AddBuildLog.
-        if let WorkerOp::AddToStore(mut add, _) = op {
-            add.framed = FramedData::read(&mut r)?;
-            Ok(WorkerOp::AddToStore(add, Resp::new()))
-        } else {
-            Ok(op)
+
+        match op {
+            WorkerOp::AddToStore(mut add, _) => {
+                add.framed = FramedData::read(&mut r)?;
+                Ok(WorkerOp::AddToStore(add, Resp::new()))
+            }
+            WorkerOp::AddToStoreNar(mut add, _) => {
+                add.framed = FramedData::read(&mut r)?;
+
+                let data: Vec<_> = add
+                    .framed
+                    .data
+                    .iter()
+                    .flat_map(|v| v.iter().cloned())
+                    .collect();
+                dbg!(&String::from_utf8_lossy(&data));
+                let nar: Nar = Cursor::new(data).read_nix()?;
+                dbg!(nar);
+                Ok(WorkerOp::AddToStoreNar(add, Resp::new()))
+            }
+            _ => Ok(op),
         }
     }
 
@@ -174,8 +190,10 @@ impl WorkerOp {
         write.write_nix(self)?;
 
         // See the comment in WorkerOp::read
-        if let WorkerOp::AddToStore(add, _resp) = self {
-            add.framed.write(write)?;
+        match self {
+            WorkerOp::AddToStore(add, _resp) => add.framed.write(write)?,
+            WorkerOp::AddToStoreNar(add, _resp) => add.framed.write(write)?,
+            _ => (),
         }
         Ok(())
     }
@@ -342,6 +360,26 @@ impl From<GcAction> for u64 {
     fn from(value: GcAction) -> Self {
         value as _
     }
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct AddToStoreNar {
+    path: NixString,
+    deriver: NixString,
+    nar_hash: NixString,
+    references: StorePathSet,
+    registration_time: u64,
+    nar_size: u64,
+    ultimate: bool,
+    sigs: StringSet,
+    content_address: NixString,
+    repair: bool,
+    dont_check_sigs: bool,
+
+    // TODO: This doesn't really belong here. It shouldn't be read as part of a
+    // worker op: it should really be streamed.
+    #[serde(skip)]
+    framed: FramedData,
 }
 
 /// A struct that panics when attempting to deserialize it. For marking

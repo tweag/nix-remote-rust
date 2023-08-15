@@ -15,7 +15,7 @@ use crate::Result;
 /// memory all at once. But as a stop-gap, that's what we'll do here.
 #[derive(Clone, Default)]
 pub struct FramedData {
-    data: Vec<ByteBuf>,
+    pub data: Vec<ByteBuf>,
 }
 
 impl std::fmt::Debug for FramedData {

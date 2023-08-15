@@ -1,13 +1,9 @@
-use std::iter::Peekable;
-
 use serde::{de::SeqAccess, ser::SerializeTuple, Deserialize, Serialize};
 
 use crate::NixString;
 
-#[derive(Clone, Debug, Default)]
-pub struct Nar {
-    entries: Vec<NarEntry>,
-}
+#[derive(Clone, Debug)]
+pub struct Nar(NarEntry);
 
 #[derive(Clone, Debug)]
 pub enum NarEntry {
@@ -16,41 +12,15 @@ pub enum NarEntry {
         executable: bool,
     },
     Target(NixString),
-    Directory(Nar),
+    Directory(Vec<NarDirectoryEntry>),
 }
 
 // TODO: if tagged_serde supported tagging with arbitrary ser/de types,
 // we could use it here
 #[derive(Clone, Debug)]
-pub enum NarDirectoryEntry {
-    Name(NixString),
-    Node(Nar),
-}
-
-pub struct PushBackable<I: Iterator> {
-    iter: I,
-    head: Option<I::Item>,
-}
-
-impl<I: Iterator> Iterator for PushBackable<I> {
-    type Item = I::Item;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        self.head.take().or_else(|| self.iter.next())
-    }
-}
-
-impl<I: Iterator> PushBackable<I> {
-    pub fn new(iter: I) -> Self {
-        Self { iter, head: None }
-    }
-
-    pub fn push_back(&mut self, item: I::Item) {
-        if self.head.is_some() {
-            panic!("too much pushing");
-        }
-        self.head = Some(item);
-    }
+pub struct NarDirectoryEntry {
+    name: NixString,
+    node: NarEntry,
 }
 
 impl Serialize for Nar {
@@ -59,20 +29,13 @@ impl Serialize for Nar {
         S: serde::Serializer,
     {
         let mut tup = serializer.serialize_tuple(usize::MAX)?;
-        tup.serialize_element("(")?;
-        for entry in &self.entries {
-            tup.serialize_element(entry)?;
-        }
-        tup.serialize_element(")")?;
+        tup.serialize_element("nix-archive-1")?;
+        tup.serialize_element(&self.0)?;
         tup.end()
     }
 }
 
-fn expect_tag<E, I>(seq: &mut I, s: &str) -> Result<(), E>
-where
-    I: Iterator<Item = Result<NixString, E>>,
-    E: serde::de::Error,
-{
+fn expect_tag<'v, A: SeqAccess<'v>>(seq: &mut A, s: &str) -> Result<(), A::Error> {
     let tag = expect_string(seq)?;
     if tag.0 != s.as_bytes() {
         Err(serde::de::Error::custom(format!(
@@ -83,49 +46,14 @@ where
     }
 }
 
-fn expect_string<E, I>(seq: &mut I) -> Result<NixString, E>
-where
-    I: Iterator<Item = Result<NixString, E>>,
-    E: serde::de::Error,
-{
-    seq.next()
+fn expect_string<'v, A: SeqAccess<'v>>(seq: &mut A) -> Result<NixString, A::Error> {
+    seq.next_element()
+        .transpose()
         .unwrap_or_else(|| Err(serde::de::Error::custom("unexpected end")))
 }
 
-struct SeqIter<'v, A: SeqAccess<'v>>(A, std::marker::PhantomData<&'v mut ()>);
-
-impl<'v, A: SeqAccess<'v>> Iterator for SeqIter<'v, A> {
-    type Item = Result<NixString, A::Error>;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        self.0.next_element().transpose()
-    }
-}
-
-fn read_nar<E, I>(seq: &mut PushBackable<I>) -> Result<Nar, E>
-where
-    I: Iterator<Item = Result<NixString, E>>,
-    E: serde::de::Error,
-{
-    expect_tag(&mut seq.iter, "(")?;
-
-    let mut ret = Nar::default();
-    loop {
-        let next = seq
-            .next()
-            .unwrap_or_else(|| Err(serde::de::Error::custom("unexpected end".to_owned())))?;
-        if next.0 == b")" {
-            return Ok(ret);
-        }
-        ret.entries.push(read_entry(seq)?);
-    }
-}
-
-fn read_entry<E, I>(seq: &mut PushBackable<I>) -> Result<NarEntry, E>
-where
-    I: Iterator<Item = Result<NixString, E>>,
-    E: serde::de::Error,
-{
+fn read_entry<'v, A: SeqAccess<'v>>(seq: &mut A) -> Result<NarEntry, A::Error> {
+    expect_tag(seq, "(")?;
     expect_tag(seq, "type")?;
     let ty = expect_string(seq)?;
     match ty.0.as_slice() {
@@ -142,12 +70,12 @@ where
 
             if tag.0 == "contents" {
                 let contents = expect_string(seq)?;
+                expect_tag(seq, ")")?;
                 Ok(NarEntry::Contents {
                     contents,
                     executable,
                 })
             } else if tag.0 == ")" {
-                seq.push_back(Ok(tag));
                 Ok(NarEntry::Contents {
                     contents: Default::default(),
                     executable,
@@ -161,9 +89,30 @@ where
         b"symlink" => {
             expect_tag(seq, "target")?;
             let target = expect_string(seq)?;
+            expect_tag(seq, ")")?;
             Ok(NarEntry::Target(target))
         }
-        b"directory" => Ok(NarEntry::Directory(read_nar(seq)?)),
+        b"directory" => {
+            let mut entries = Vec::new();
+            loop {
+                let tag = expect_string(seq)?;
+                if tag.0 == ")" {
+                    break Ok(NarEntry::Directory(entries));
+                } else if tag.0 == "entry" {
+                    expect_tag(seq, "(")?;
+                    expect_tag(seq, "name")?;
+                    let name = expect_string(seq)?;
+                    expect_tag(seq, "node")?;
+                    let node = read_entry(seq)?;
+                    expect_tag(seq, ")")?;
+                    entries.push(NarDirectoryEntry { name, node });
+                } else {
+                    break Err(serde::de::Error::custom(format!(
+                        "expected entry, got {tag:?}"
+                    )));
+                }
+            }
+        }
         v => Err(serde::de::Error::custom(format!(
             "unknown file type `{v:?}`"
         ))),
@@ -185,14 +134,12 @@ impl<'de> Deserialize<'de> for Nar {
             }
 
             fn visit_seq<A: SeqAccess<'v>>(self, mut seq: A) -> Result<Nar, A::Error> {
-                // TODO: factor out into a parse function
-                let iter = SeqIter(&mut seq, std::marker::PhantomData);
-                let mut pushable = PushBackable::new(iter);
-                read_nar(&mut pushable)
+                expect_tag(&mut seq, "nix-archive-1")?;
+                read_entry(&mut seq).map(Nar)
             }
         }
 
-        todo!()
+        deserializer.deserialize_tuple(usize::MAX, Visitor)
     }
 }
 
@@ -201,28 +148,42 @@ impl Serialize for NarEntry {
     where
         S: serde::Serializer,
     {
+        let mut tup = serializer.serialize_tuple(usize::MAX)?;
+        tup.serialize_element("(")?;
+        tup.serialize_element("type")?;
         match self {
             NarEntry::Contents {
                 contents,
                 executable,
             } => {
+                tup.serialize_element("regular")?;
                 if *executable {
-                    ("executable", "", "contents", &contents).serialize(serializer)
-                } else {
-                    ("contents", &contents).serialize(serializer)
+                    tup.serialize_element("executable")?;
+                    tup.serialize_element("")?;
                 }
+                tup.serialize_element("contents")?;
+                tup.serialize_element(&contents)?;
             }
-            NarEntry::Target(s) => ("target", s).serialize(serializer),
+            NarEntry::Target(s) => {
+                tup.serialize_element("symlink")?;
+                tup.serialize_element("target")?;
+                tup.serialize_element(s)?;
+            }
             NarEntry::Directory(entries) => {
+                tup.serialize_element("directory")?;
                 // FIXME: copy-paste from Nar
-                let mut tup = serializer.serialize_tuple(usize::MAX)?;
-                tup.serialize_element("(")?;
-                for entry in &entries.entries {
-                    tup.serialize_element(entry)?;
+                for entry in entries {
+                    tup.serialize_element("entry")?;
+                    tup.serialize_element("(")?;
+                    tup.serialize_element("name")?;
+                    tup.serialize_element(&entry.name)?;
+                    tup.serialize_element("node")?;
+                    tup.serialize_element(&entry.node)?;
+                    tup.serialize_element(")")?;
                 }
-                tup.serialize_element(")")?;
-                tup.end()
             }
         }
+        tup.serialize_element(")")?;
+        tup.end()
     }
 }
