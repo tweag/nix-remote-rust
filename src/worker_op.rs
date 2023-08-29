@@ -66,20 +66,20 @@ pub enum WorkerOp {
     QueryPathInfo(Path, Resp<QueryPathInfoResponse>),
     #[tagged_serde = 29]
     QueryPathFromHashPart(NixString, Resp<NixString>),
-    #[tagged_serde = 30]
-    QuerySubstitutablePathInfos(Todo, Resp<Todo>), // We have the structures, how do we test it?
     #[tagged_serde = 31]
-    QueryValidPaths(Todo, Resp<Todo>),
+    QueryValidPaths(QueryValidPaths, Resp<StorePathSet>),
     #[tagged_serde = 32]
-    QuerySubstitutablePaths(Todo, Resp<Todo>),
+    QuerySubstitutablePaths(StorePathSet, Resp<StorePathSet>),
     #[tagged_serde = 33]
-    QueryValidDerivers(Todo, Resp<Todo>),
+    QueryValidDerivers(NixString, Resp<StorePathSet>),
     #[tagged_serde = 34]
     OptimiseStore((), Resp<u64>),
     #[tagged_serde = 35]
-    VerifyStore(Todo, Resp<Todo>),
-    #[tagged_serde = 36]
-    BuildDerivation(Todo, Resp<Todo>),
+    VerifyStore(VerifyStore, Resp<bool>),
+    // We think this is deprecated, but we're not entirely sure
+    // It seems to only be used in build-remote.cc, but we don't know what that's for
+    // #[tagged_serde = 36]
+    // BuildDerivation(Todo, Resp<Todo>),
     #[tagged_serde = 37]
     AddSignatures(Todo, Resp<Todo>),
     #[tagged_serde = 38]
@@ -95,7 +95,7 @@ pub enum WorkerOp {
     #[tagged_serde = 43]
     QueryRealisation(Todo, Resp<Todo>),
     #[tagged_serde = 44]
-    AddMultipleToStore(Todo, Resp<Todo>),
+    AddMultipleToStore(AddMultipleToStore, Resp<()>),
     #[tagged_serde = 45]
     AddBuildLog(Todo, Resp<Todo>),
     #[tagged_serde = 46]
@@ -119,13 +119,11 @@ macro_rules! for_each_op {
             QueryAllValidPaths,
             QueryPathInfo,
             QueryPathFromHashPart,
-            QuerySubstitutablePathInfos,
             QueryValidPaths,
             QuerySubstitutablePaths,
             QueryValidDerivers,
             OptimiseStore,
             VerifyStore,
-            BuildDerivation,
             AddSignatures,
             NarFromPath,
             AddToStoreNar,
@@ -177,6 +175,10 @@ impl WorkerOp {
                 }
                 Ok(WorkerOp::AddToStoreNar(add, Resp::new()))
             }
+            WorkerOp::AddMultipleToStore(mut add, _) => {
+                add.framed = FramedData::read(&mut r)?;
+                Ok(WorkerOp::AddMultipleToStore(add, Resp::new()))
+            }
             _ => Ok(op),
         }
     }
@@ -188,6 +190,7 @@ impl WorkerOp {
         match self {
             WorkerOp::AddToStore(add, _resp) => add.framed.write(write)?,
             WorkerOp::AddToStoreNar(add, _resp) => add.framed.write(write)?,
+            WorkerOp::AddMultipleToStore(add, _resp) => add.framed.write(write)?,
             _ => (),
         }
         Ok(())
@@ -382,6 +385,23 @@ pub struct FindRootsResponse {
     roots: Vec<(NixString, NixString)>,
 }
 
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct QueryValidPaths {
+    paths: StorePathSet,
+    builders_use_substitutes: bool,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct AddMultipleToStore {
+    repair: bool,
+    dont_check_sigs: bool,
+
+    // TODO: This doesn't really belong here. It shouldn't be read as part of a
+    // worker op: it should really be streamed.
+    #[serde(skip)]
+    framed: FramedData,
+}
+
 /// A struct that panics when attempting to deserialize it. For marking
 /// parts of the protocol that we haven't implemented yet.
 #[derive(Debug, Clone, Serialize)]
@@ -408,24 +428,12 @@ pub struct ValidPathInfo {
     content_address: ByteBuf, // Can be empty
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct SubstitutablePathInfo {
-    deriver: Path,
-    references: StorePathSet,
-    downloadSize: u64,
-    narSize: u64,
-}
-
 type ContentAddress = NixString;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct QuerySubstitutablePathInfos {
-    paths: Vec<(NixString, ContentAddress)>,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct QuerySubstitutablePathInfosResponse {
-    infos: Vec<(NixString, SubstitutablePathInfo)>,
+pub struct VerifyStore {
+    check_contents: bool,
+    repair: bool,
 }
 
 #[cfg(test)]
