@@ -1,4 +1,5 @@
 use serde::{de::SeqAccess, ser::SerializeTuple, Deserialize, Serialize};
+use serde_bytes::ByteBuf;
 
 use crate::NixString;
 
@@ -23,13 +24,21 @@ pub struct NarDirectoryEntry {
     node: NarEntry,
 }
 
+trait SerializeTupleExt: SerializeTuple {
+    fn serialize_buf(&mut self, s: impl AsRef<[u8]>) -> Result<(), Self::Error> {
+        self.serialize_element(&ByteBuf::from(s.as_ref()))
+    }
+}
+
+impl<S: SerializeTuple> SerializeTupleExt for S {}
+
 impl Serialize for Nar {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
         S: serde::Serializer,
     {
         let mut tup = serializer.serialize_tuple(usize::MAX)?;
-        tup.serialize_element("nix-archive-1")?;
+        tup.serialize_buf(b"nix-archive-1")?;
         tup.serialize_element(&self.0)?;
         tup.end()
     }
@@ -149,41 +158,40 @@ impl Serialize for NarEntry {
         S: serde::Serializer,
     {
         let mut tup = serializer.serialize_tuple(usize::MAX)?;
-        tup.serialize_element("(")?;
-        tup.serialize_element("type")?;
+        tup.serialize_buf(b"(")?;
+        tup.serialize_buf(b"type")?;
         match self {
             NarEntry::Contents {
                 contents,
                 executable,
             } => {
-                tup.serialize_element("regular")?;
+                tup.serialize_buf(b"regular")?;
                 if *executable {
-                    tup.serialize_element("executable")?;
-                    tup.serialize_element("")?;
+                    tup.serialize_buf(b"executable")?;
+                    tup.serialize_buf(b"")?;
                 }
-                tup.serialize_element("contents")?;
+                tup.serialize_buf(b"contents")?;
                 tup.serialize_element(&contents)?;
             }
             NarEntry::Target(s) => {
-                tup.serialize_element("symlink")?;
-                tup.serialize_element("target")?;
+                tup.serialize_buf(b"symlink")?;
+                tup.serialize_buf(b"target")?;
                 tup.serialize_element(s)?;
             }
             NarEntry::Directory(entries) => {
-                tup.serialize_element("directory")?;
-                // FIXME: copy-paste from Nar
+                tup.serialize_buf(b"directory")?;
                 for entry in entries {
-                    tup.serialize_element("entry")?;
-                    tup.serialize_element("(")?;
-                    tup.serialize_element("name")?;
+                    tup.serialize_buf(b"entry")?;
+                    tup.serialize_buf(b"(")?;
+                    tup.serialize_buf(b"name")?;
                     tup.serialize_element(&entry.name)?;
-                    tup.serialize_element("node")?;
+                    tup.serialize_buf(b"node")?;
                     tup.serialize_element(&entry.node)?;
-                    tup.serialize_element(")")?;
+                    tup.serialize_buf(b")")?;
                 }
             }
         }
-        tup.serialize_element(")")?;
+        tup.serialize_buf(b")")?;
         tup.end()
     }
 }
