@@ -54,28 +54,20 @@ pub enum WorkerOp {
     AddTempRoot(Path, Resp<u64>),
     #[tagged_serde = 12]
     AddIndirectRoot(Todo, Resp<Todo>),
-    #[tagged_serde = 13]
-    SyncWithGC(Todo, Resp<Todo>),
     #[tagged_serde = 14]
-    FindRoots(Todo, Resp<Todo>),
+    FindRoots((), Resp<FindRootsResponse>),
     #[tagged_serde = 19]
     SetOptions(SetOptions, Resp<()>),
     #[tagged_serde = 20]
     CollectGarbage(CollectGarbage, Resp<CollectGarbageResponse>),
-    #[tagged_serde = 21]
-    QuerySubstitutablePathInfo(Todo, Resp<Todo>),
     #[tagged_serde = 23]
-    QueryAllValidPaths(Todo, Resp<Todo>),
-    #[tagged_serde = 24]
-    QueryFailedPaths(Todo, Resp<Todo>),
-    #[tagged_serde = 25]
-    ClearFailedPaths(Todo, Resp<Todo>),
+    QueryAllValidPaths((), Resp<StorePathSet>),
     #[tagged_serde = 26]
     QueryPathInfo(Path, Resp<QueryPathInfoResponse>),
     #[tagged_serde = 29]
-    QueryPathFromHashPart(Todo, Resp<Todo>),
+    QueryPathFromHashPart(NixString, Resp<NixString>),
     #[tagged_serde = 30]
-    QuerySubstitutablePathInfos(Todo, Resp<Todo>),
+    QuerySubstitutablePathInfos(Todo, Resp<Todo>), // We have the structures, how do we test it?
     #[tagged_serde = 31]
     QueryValidPaths(Todo, Resp<Todo>),
     #[tagged_serde = 32]
@@ -83,7 +75,7 @@ pub enum WorkerOp {
     #[tagged_serde = 33]
     QueryValidDerivers(Todo, Resp<Todo>),
     #[tagged_serde = 34]
-    OptimiseStore(Todo, Resp<Todo>),
+    OptimiseStore((), Resp<u64>),
     #[tagged_serde = 35]
     VerifyStore(Todo, Resp<Todo>),
     #[tagged_serde = 36]
@@ -121,14 +113,10 @@ macro_rules! for_each_op {
             EnsurePath,
             AddTempRoot,
             AddIndirectRoot,
-            SyncWithGC,
             FindRoots,
             SetOptions,
             CollectGarbage,
-            QuerySubstitutablePathInfo,
             QueryAllValidPaths,
-            QueryFailedPaths,
-            ClearFailedPaths,
             QueryPathInfo,
             QueryPathFromHashPart,
             QuerySubstitutablePathInfos,
@@ -171,6 +159,8 @@ impl WorkerOp {
             WorkerOp::AddToStoreNar(mut add, _) => {
                 add.framed = FramedData::read(&mut r)?;
 
+                // We don't actually need to parse the NAR but we want to
+                // exercise our NAR serializing and deserializing code
                 let data: Vec<_> = add
                     .framed
                     .data
@@ -178,8 +168,13 @@ impl WorkerOp {
                     .flat_map(|v| v.iter().cloned())
                     .collect();
                 dbg!(&String::from_utf8_lossy(&data));
-                let nar: Nar = Cursor::new(data).read_nix()?;
-                dbg!(nar);
+                let nar: Nar = Cursor::new(&data).read_nix()?;
+                dbg!(&nar);
+                let mut buf = Vec::new();
+                buf.write_nix(&nar).unwrap();
+                if buf != data {
+                    panic!("failed to round-trip NAR");
+                }
                 Ok(WorkerOp::AddToStoreNar(add, Resp::new()))
             }
             _ => Ok(op),
@@ -382,6 +377,11 @@ pub struct AddToStoreNar {
     framed: FramedData,
 }
 
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct FindRootsResponse {
+    roots: Vec<(NixString, NixString)>,
+}
+
 /// A struct that panics when attempting to deserialize it. For marking
 /// parts of the protocol that we haven't implemented yet.
 #[derive(Debug, Clone, Serialize)]
@@ -406,6 +406,26 @@ pub struct ValidPathInfo {
     ultimate: bool,
     sigs: StringSet,
     content_address: ByteBuf, // Can be empty
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct SubstitutablePathInfo {
+    deriver: Path,
+    references: StorePathSet,
+    downloadSize: u64,
+    narSize: u64,
+}
+
+type ContentAddress = NixString;
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct QuerySubstitutablePathInfos {
+    paths: Vec<(NixString, ContentAddress)>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct QuerySubstitutablePathInfosResponse {
+    infos: Vec<(NixString, SubstitutablePathInfo)>,
 }
 
 #[cfg(test)]
