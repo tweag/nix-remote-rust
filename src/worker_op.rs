@@ -5,11 +5,11 @@ use std::io::{Cursor, Read, Write};
 use tagged_serde::TaggedSerde;
 
 use crate::nar::Nar;
-use crate::PathSet;
 use crate::{
     serialize::{NixDeserializer, NixReadExt, NixSerializer, NixWriteExt},
     FramedData, NarHash, NixString, Path, Result, StorePathSet, StringSet, ValidPathInfoWithPath,
 };
+use crate::{PathSet, RealisationSet};
 
 /// A zero-sized marker type. Its job is to mark the expected response
 /// type for each worker op.
@@ -40,10 +40,8 @@ impl<T> Resp<T> {
 pub enum WorkerOp {
     #[tagged_serde = 1]
     IsValidPath(Path, Resp<bool>),
-    #[tagged_serde = 3]
-    HasSubstitutes(Todo, Resp<Todo>),
     #[tagged_serde = 6]
-    QueryReferrers(Todo, Resp<Todo>),
+    QueryReferrers(NixString, Resp<StorePathSet>),
     #[tagged_serde = 7]
     AddToStore(AddToStore, Resp<ValidPathInfoWithPath>),
     #[tagged_serde = 9]
@@ -52,8 +50,6 @@ pub enum WorkerOp {
     EnsurePath(Path, Resp<u64>),
     #[tagged_serde = 11]
     AddTempRoot(Path, Resp<u64>),
-    #[tagged_serde = 12]
-    AddIndirectRoot(Todo, Resp<Todo>),
     #[tagged_serde = 14]
     FindRoots((), Resp<FindRootsResponse>),
     #[tagged_serde = 19]
@@ -81,7 +77,7 @@ pub enum WorkerOp {
     // #[tagged_serde = 36]
     // BuildDerivation(Todo, Resp<Todo>),
     #[tagged_serde = 37]
-    AddSignatures(Todo, Resp<Todo>),
+    AddSignatures(AddSignatures, Resp<u64>),
     #[tagged_serde = 38]
     NarFromPath(Path, Resp<Nar>),
     #[tagged_serde = 39]
@@ -91,13 +87,13 @@ pub enum WorkerOp {
     #[tagged_serde = 41]
     QueryDerivationOutputMap(Path, Resp<DerivationOutputMap>),
     #[tagged_serde = 42]
-    RegisterDrvOutput(Todo, Resp<Todo>),
+    RegisterDrvOutput(Realisation, Resp<()>),
     #[tagged_serde = 43]
-    QueryRealisation(Todo, Resp<Todo>),
+    QueryRealisation(NixString, Resp<RealisationSet>),
     #[tagged_serde = 44]
     AddMultipleToStore(AddMultipleToStore, Resp<()>),
     #[tagged_serde = 45]
-    AddBuildLog(Todo, Resp<Todo>),
+    AddBuildLog(AddBuildLog, Resp<u64>),
     #[tagged_serde = 46]
     BuildPathsWithResults(BuildPaths, Resp<Vec<BuildResult>>),
 }
@@ -106,13 +102,11 @@ macro_rules! for_each_op {
     ($macro_name:ident !) => {
         $macro_name!(
             IsValidPath,
-            HasSubstitutes,
             QueryReferrers,
             AddToStore,
             BuildPaths,
             EnsurePath,
             AddTempRoot,
-            AddIndirectRoot,
             FindRoots,
             SetOptions,
             CollectGarbage,
@@ -165,9 +159,7 @@ impl WorkerOp {
                     .iter()
                     .flat_map(|v| v.iter().cloned())
                     .collect();
-                dbg!(&String::from_utf8_lossy(&data));
                 let nar: Nar = Cursor::new(&data).read_nix()?;
-                dbg!(&nar);
                 let mut buf = Vec::new();
                 buf.write_nix(&nar).unwrap();
                 if buf != data {
@@ -178,6 +170,10 @@ impl WorkerOp {
             WorkerOp::AddMultipleToStore(mut add, _) => {
                 add.framed = FramedData::read(&mut r)?;
                 Ok(WorkerOp::AddMultipleToStore(add, Resp::new()))
+            }
+            WorkerOp::AddBuildLog(mut add, _) => {
+                add.framed = FramedData::read(&mut r)?;
+                Ok(WorkerOp::AddBuildLog(add, Resp::new()))
             }
             _ => Ok(op),
         }
@@ -191,6 +187,7 @@ impl WorkerOp {
             WorkerOp::AddToStore(add, _resp) => add.framed.write(write)?,
             WorkerOp::AddToStoreNar(add, _resp) => add.framed.write(write)?,
             WorkerOp::AddMultipleToStore(add, _resp) => add.framed.write(write)?,
+            WorkerOp::AddBuildLog(add, _resp) => add.framed.write(write)?,
             _ => (),
         }
         Ok(())
@@ -303,7 +300,7 @@ pub struct BuildResult {
 
 // TODO: first NixString is a DrvOutput; second is a Realisation
 #[derive(Debug, Clone, Deserialize, Serialize)]
-pub struct DrvOutputs(Vec<(NixString, NixString)>);
+pub struct DrvOutputs(Vec<(NixString, Realisation)>);
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct CollectGarbage {
@@ -429,11 +426,25 @@ pub struct ValidPathInfo {
 }
 
 type ContentAddress = NixString;
+type Realisation = NixString;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct VerifyStore {
     check_contents: bool,
     repair: bool,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct AddSignatures {
+    path: NixString,
+    signatures: StringSet,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct AddBuildLog {
+    path: Path,
+    #[serde(skip)]
+    framed: FramedData,
 }
 
 #[cfg(test)]

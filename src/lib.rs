@@ -144,6 +144,11 @@ pub struct StringSet {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct RealisationSet {
+    realisations: Vec<ByteBuf>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct NarHash {
     data: ByteBuf,
 }
