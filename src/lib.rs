@@ -35,22 +35,24 @@ pub enum Error {
 
 pub type Result<T, E = Error> = std::result::Result<T, E>;
 
-#[derive(Deserialize, Serialize, Clone, PartialEq)]
+#[derive(Deserialize, Serialize, Clone, PartialEq, Debug)]
 #[serde(transparent)]
-pub struct Path(ByteBuf);
+pub struct StorePath(pub NixString);
+
+#[derive(Deserialize, Serialize, Clone, PartialEq, Debug)]
+#[serde(transparent)]
+pub struct Path(pub NixString);
+
+#[derive(Deserialize, Serialize, Clone, PartialEq, Debug)]
+#[serde(transparent)]
+pub struct DerivedPath(pub NixString);
 
 /// Strings in the nix protocol are not necessarily UTF-8.
 ///
 /// This type marks a byte buffer that's expected to be "stringy".
 #[derive(Deserialize, Serialize, Clone, PartialEq, Eq, Default)]
 #[serde(transparent)]
-pub struct NixString(ByteBuf);
-
-impl std::fmt::Debug for Path {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(&String::from_utf8_lossy(&self.0))
-    }
-}
+pub struct NixString(pub ByteBuf);
 
 impl std::fmt::Debug for NixString {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -128,35 +130,37 @@ pub struct NixStoreWrite<W> {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct PathSet {
     // TODO: in nix, they call `parseStorePath` to separate store directory from path
-    paths: Vec<Path>,
+    pub paths: Vec<Path>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct StorePathSet {
     // TODO: in nix, they call `parseStorePath` to separate store directory from path
-    paths: Vec<Path>,
+    pub paths: Vec<StorePath>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct StringSet {
     // TODO: in nix, they call `parseStorePath` to separate store directory from path
-    paths: Vec<ByteBuf>,
+    pub paths: Vec<NixString>,
 }
+
+pub type Realisation = NixString;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct RealisationSet {
-    realisations: Vec<ByteBuf>,
+    pub realisations: Vec<Realisation>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct NarHash {
-    data: ByteBuf,
+    pub data: ByteBuf,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ValidPathInfoWithPath {
-    path: Path,
-    info: ValidPathInfo,
+    pub path: StorePath,
+    pub info: ValidPathInfo,
 }
 
 impl<R: Read> NixStoreRead<R> {
@@ -175,7 +179,7 @@ impl<W: Write> NixStoreWrite<W> {
 
     fn write_string(&mut self, s: &[u8]) -> Result<()> {
         self.write_u64(s.len() as _)?;
-        self.inner.write_all(&s)?;
+        self.inner.write_all(s)?;
 
         if s.len() % 8 > 0 {
             let padding = 8 - s.len() % 8;

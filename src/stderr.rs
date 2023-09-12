@@ -4,15 +4,10 @@
 //!   a 64-bit opcode followed by the body of the message. The final message has the opcode `Last`.
 //! - the daemon sends the reply to the worker op.
 
-use anyhow::anyhow;
-use num_derive::FromPrimitive;
-use num_traits::FromPrimitive;
 use serde::{Deserialize, Serialize};
 use serde_bytes::ByteBuf;
-use std::io::{Read, Write};
 use tagged_serde::TaggedSerde;
 
-use crate::serialize::{NixDeserializer, NixSerializer};
 use crate::{NixString, Result};
 
 /// The different stderr messages.

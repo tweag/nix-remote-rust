@@ -34,21 +34,26 @@ pub fn derive(input: TokenStream) -> TokenStream {
             })
             .expect("No enum tag found for {variant_name}");
 
-        let number_of_fields = if let Fields::Unnamed(FieldsUnnamed {
-            paren_token: _,
-            unnamed,
-        }) = &v.fields
-        {
-            unnamed.len()
-        } else {
-            unimplemented!()
+        let number_of_fields = match &v.fields {
+            Fields::Unnamed(FieldsUnnamed {
+                paren_token: _,
+                unnamed,
+            }) => Some(unnamed.len()),
+            Fields::Unit => None,
+            _ => unimplemented!(),
         };
 
-        let field_names : Vec<_> = (0..number_of_fields).map(|n| Ident::new(&format!("field{n}"), Span::call_site())).collect();
+        if let Some(number_of_fields) = number_of_fields {
+            let field_names : Vec<_> = (0..number_of_fields).map(|n| Ident::new(&format!("field{n}"), Span::call_site())).collect();
 
-        quote! {
-            // FIXME don't hardcode u64
-            #ident::#variant_name(#( #field_names ),*) => (#tag as u64, #( #field_names ),*).serialize(serializer)
+            quote! {
+                // FIXME don't hardcode u64
+                #ident::#variant_name(#( #field_names ),*) => (#tag as u64, #( #field_names ),*).serialize(serializer)
+            }
+        } else {
+            quote! {
+                #ident::#variant_name => (#tag as u64).serialize(serializer)
+            }
         }
     });
 
@@ -70,29 +75,36 @@ pub fn derive(input: TokenStream) -> TokenStream {
             })
             .expect("No enum tag found for {variant_name}");
 
-        let number_of_fields = if let Fields::Unnamed(FieldsUnnamed {
-            paren_token: _,
-            unnamed,
-        }) = &v.fields
-        {
-            unnamed.len()
-        } else {
-            unimplemented!()
+        let number_of_fields = match &v.fields {
+            Fields::Unnamed(FieldsUnnamed {
+                paren_token: _,
+                unnamed,
+            }) => Some(unnamed.len()),
+            Fields::Unit => None,
+            _ => unimplemented!(),
         };
 
-        let variant_args: Vec<_> = (0..number_of_fields)
-            .map(|_| {
-                quote! {
-                    seq
-                        .next_element().map_err(|e| A::Error::custom(format!("failed to read variant with tag {}: {}", tag, e)))?
-                        .ok_or_else(|| A::Error::custom(format!("failed to read variant with tag {}", tag)))?
-                }
-            })
-            .collect();
+        let variant_pattern = if let Some(number_of_fields) = number_of_fields {
+            let variant_args: Vec<_> = (0..number_of_fields)
+                .map(|_| {
+                    quote! {
+                        seq
+                            .next_element().map_err(|e| A::Error::custom(format!("failed to read variant with tag {}: {}", tag, e)))?
+                            .ok_or_else(|| A::Error::custom(format!("failed to read variant with tag {}", tag)))?
+                    }
+                })
+                .collect();
+            quote! {
+                (#( #variant_args ),*)
+            }
+        } else {
+            quote! {
+            }
+        };
 
         quote! {
             #tag => {
-                Ok(#ident::#variant_name(#( #variant_args ),*))
+                Ok(#ident::#variant_name #variant_pattern)
             }
         }
     });
