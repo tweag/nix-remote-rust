@@ -71,10 +71,8 @@ pub enum WorkerOp {
     OptimiseStore((), Resp<u64>),
     #[tagged_serde = 35]
     VerifyStore(VerifyStore, Resp<bool>),
-    // We think this is deprecated, but we're not entirely sure
-    // It seems to only be used in build-remote.cc, but we don't know what that's for
-    // #[tagged_serde = 36]
-    // BuildDerivation(Todo, Resp<Todo>),
+    #[tagged_serde = 36]
+    BuildDerivation(BuildDerivation, Resp<BuildResult>),
     #[tagged_serde = 37]
     AddSignatures(AddSignatures, Resp<u64>),
     // FIXME: this will need to stream the response
@@ -118,6 +116,7 @@ macro_rules! for_each_op {
             QueryValidDerivers,
             OptimiseStore,
             VerifyStore,
+            BuildDerivation,
             AddSignatures,
             NarFromPath,
             AddToStoreNar,
@@ -476,6 +475,30 @@ pub struct AddBuildLog {
     pub path: StorePath,
     #[serde(skip)]
     framed: FramedData,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct BuildDerivation {
+    store_path: StorePath,
+    derivation: Derivation,
+    build_mode: BuildMode,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct Derivation {
+    pub outputs: Vec<(NixString, DerivationOutput)>,
+    pub input_sources: StorePathSet,
+    pub platform: NixString,
+    pub builder: Path,
+    pub args: StringSet,
+    pub env: Vec<(NixString, NixString)>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct DerivationOutput {
+    store_path: StorePath,
+    method_or_hash: NixString,
+    hash_or_impure: NixString,
 }
 
 #[cfg(test)]
