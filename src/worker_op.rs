@@ -1,5 +1,6 @@
 use serde::{Deserialize, Serialize};
 use std::io::{Cursor, Read, Write};
+use std::ops::{Deref, DerefMut};
 use tagged_serde::TaggedSerde;
 
 use crate::nar::Nar;
@@ -30,6 +31,34 @@ impl<T> Resp<T> {
     }
 }
 
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+pub struct Plain<T>(pub T);
+
+impl<T> Deref for Plain<T> {
+    type Target = T;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+pub struct WithFramedSource<T>(pub T);
+
+impl<T> Deref for WithFramedSource<T> {
+    type Target = T;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl<T> DerefMut for WithFramedSource<T> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
+    }
+}
+
 /// The different worker ops.
 ///
 /// On the wire, they are represented as the opcode followed by the body.
@@ -38,62 +67,62 @@ impl<T> Resp<T> {
 #[derive(Debug, TaggedSerde)]
 pub enum WorkerOp {
     #[tagged_serde = 1]
-    IsValidPath(StorePath, Resp<bool>),
+    IsValidPath(Plain<StorePath>, Resp<bool>),
     #[tagged_serde = 6]
-    QueryReferrers(StorePath, Resp<StorePathSet>),
+    QueryReferrers(Plain<StorePath>, Resp<StorePathSet>),
     #[tagged_serde = 7]
-    AddToStore(AddToStore, Resp<ValidPathInfoWithPath>),
+    AddToStore(WithFramedSource<AddToStore>, Resp<ValidPathInfoWithPath>),
     #[tagged_serde = 9]
-    BuildPaths(BuildPaths, Resp<u64>),
+    BuildPaths(Plain<BuildPaths>, Resp<u64>),
     #[tagged_serde = 10]
-    EnsurePath(StorePath, Resp<u64>),
+    EnsurePath(Plain<StorePath>, Resp<u64>),
     #[tagged_serde = 11]
-    AddTempRoot(StorePath, Resp<u64>),
+    AddTempRoot(Plain<StorePath>, Resp<u64>),
     #[tagged_serde = 14]
-    FindRoots((), Resp<FindRootsResponse>),
+    FindRoots(Plain<()>, Resp<FindRootsResponse>),
     #[tagged_serde = 19]
-    SetOptions(SetOptions, Resp<()>),
+    SetOptions(Plain<SetOptions>, Resp<()>),
     #[tagged_serde = 20]
-    CollectGarbage(CollectGarbage, Resp<CollectGarbageResponse>),
+    CollectGarbage(Plain<CollectGarbage>, Resp<CollectGarbageResponse>),
     #[tagged_serde = 23]
-    QueryAllValidPaths((), Resp<StorePathSet>),
+    QueryAllValidPaths(Plain<()>, Resp<StorePathSet>),
     #[tagged_serde = 26]
-    QueryPathInfo(StorePath, Resp<QueryPathInfoResponse>),
+    QueryPathInfo(Plain<StorePath>, Resp<QueryPathInfoResponse>),
     #[tagged_serde = 29]
-    QueryPathFromHashPart(NixString, Resp<OptionalStorePath>),
+    QueryPathFromHashPart(Plain<NixString>, Resp<OptionalStorePath>),
     #[tagged_serde = 31]
-    QueryValidPaths(QueryValidPaths, Resp<StorePathSet>),
+    QueryValidPaths(Plain<QueryValidPaths>, Resp<StorePathSet>),
     #[tagged_serde = 32]
-    QuerySubstitutablePaths(StorePathSet, Resp<StorePathSet>),
+    QuerySubstitutablePaths(Plain<StorePathSet>, Resp<StorePathSet>),
     #[tagged_serde = 33]
-    QueryValidDerivers(StorePath, Resp<StorePathSet>),
+    QueryValidDerivers(Plain<StorePath>, Resp<StorePathSet>),
     #[tagged_serde = 34]
-    OptimiseStore((), Resp<u64>),
+    OptimiseStore(Plain<()>, Resp<u64>),
     #[tagged_serde = 35]
-    VerifyStore(VerifyStore, Resp<bool>),
+    VerifyStore(Plain<VerifyStore>, Resp<bool>),
     #[tagged_serde = 36]
-    BuildDerivation(BuildDerivation, Resp<BuildResult>),
+    BuildDerivation(Plain<BuildDerivation>, Resp<BuildResult>),
     #[tagged_serde = 37]
-    AddSignatures(AddSignatures, Resp<u64>),
+    AddSignatures(Plain<AddSignatures>, Resp<u64>),
     // FIXME: this will need to stream the response
     #[tagged_serde = 38]
-    NarFromPath(StorePath, Resp<Nar>),
+    NarFromPath(Plain<StorePath>, Resp<Nar>),
     #[tagged_serde = 39]
-    AddToStoreNar(AddToStoreNar, Resp<()>),
+    AddToStoreNar(WithFramedSource<AddToStoreNar>, Resp<()>),
     #[tagged_serde = 40]
-    QueryMissing(QueryMissing, Resp<QueryMissingResponse>),
+    QueryMissing(Plain<QueryMissing>, Resp<QueryMissingResponse>),
     #[tagged_serde = 41]
-    QueryDerivationOutputMap(StorePath, Resp<DerivationOutputMap>),
+    QueryDerivationOutputMap(Plain<StorePath>, Resp<DerivationOutputMap>),
     #[tagged_serde = 42]
-    RegisterDrvOutput(Realisation, Resp<()>),
+    RegisterDrvOutput(Plain<Realisation>, Resp<()>),
     #[tagged_serde = 43]
-    QueryRealisation(NixString, Resp<RealisationSet>),
+    QueryRealisation(Plain<NixString>, Resp<RealisationSet>),
     #[tagged_serde = 44]
-    AddMultipleToStore(AddMultipleToStore, Resp<()>),
+    AddMultipleToStore(WithFramedSource<AddMultipleToStore>, Resp<()>),
     #[tagged_serde = 45]
-    AddBuildLog(AddBuildLog, Resp<u64>),
+    AddBuildLog(WithFramedSource<AddBuildLog>, Resp<u64>),
     #[tagged_serde = 46]
-    BuildPathsWithResults(BuildPaths, Resp<Vec<(DerivedPath, BuildResult)>>),
+    BuildPathsWithResults(Plain<BuildPaths>, Resp<Vec<(DerivedPath, BuildResult)>>),
 }
 
 macro_rules! for_each_op {
@@ -278,6 +307,7 @@ pub struct AddToStore {
     pub repair: bool,
     // TODO: This doesn't really belong here. It shouldn't be read as part of a
     // worker op: it should really be streamed.
+    // TODO: remove this, and use the WithFramedSource/Plain wrappers instead.
     #[serde(skip)]
     framed: FramedData,
 }
