@@ -18,7 +18,7 @@ pub use framed_data::FramedData;
 use crate::{
     printing_read::PrintingRead,
     serialize::{NixReadExt, NixWriteExt},
-    worker_op::WorkerOp,
+    worker_op::{Stream, WorkerOp},
 };
 
 #[derive(Debug, thiserror::Error)]
@@ -293,10 +293,8 @@ impl<R: Read, W: Write> NixReadWrite<R, W> {
                 },
             };
 
-            let op = match WorkerOp::read(&mut read.inner) {
-                Err(Error::Deser(serialize::Error::Io(e)))
-                    if e.kind() == std::io::ErrorKind::UnexpectedEof =>
-                {
+            let op = match read.inner.read_nix::<WorkerOp>() {
+                Err(serialize::Error::Io(e)) if e.kind() == std::io::ErrorKind::UnexpectedEof => {
                     eprintln!("EOF, closing");
                     break;
                 }
@@ -306,7 +304,7 @@ impl<R: Read, W: Write> NixReadWrite<R, W> {
             // Check that the re-serialization of the op we just read is equivalent
             // to the original bytes.
             let mut buf = Vec::new();
-            op.write(&mut buf).unwrap();
+            buf.write_nix(&op).unwrap();
             if buf != read.inner.buf {
                 eprintln!("mismatch!");
                 eprintln!("{buf:?}");
@@ -315,7 +313,9 @@ impl<R: Read, W: Write> NixReadWrite<R, W> {
             }
 
             eprintln!("read op {op:?}");
-            op.write(&mut self.proxy.child_in).unwrap();
+            self.proxy.child_in.write_nix(&op).unwrap();
+            op.stream(&mut read.inner, &mut self.proxy.child_in)
+                .unwrap();
             self.proxy.child_in.flush().unwrap();
 
             // Read back stderr messages from the remote daemon.

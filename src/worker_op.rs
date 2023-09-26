@@ -1,13 +1,13 @@
 use serde::{Deserialize, Serialize};
-use std::io::{Cursor, Read, Write};
+use std::io::Read;
+use std::io::Write;
 use std::ops::{Deref, DerefMut};
 use tagged_serde::TaggedSerde;
 
 use crate::nar::Nar;
 use crate::{
-    serialize::{NixDeserializer, NixReadExt, NixSerializer, NixWriteExt},
-    FramedData, NarHash, NixString, Result, StorePath, StorePathSet, StringSet,
-    ValidPathInfoWithPath,
+    serialize::{NixDeserializer, NixSerializer},
+    NarHash, NixString, Result, StorePath, StorePathSet, StringSet, ValidPathInfoWithPath,
 };
 use crate::{DerivedPath, Path, PathSet, Realisation, RealisationSet};
 
@@ -20,12 +20,6 @@ pub struct Resp<T> {
 }
 
 impl<T> Resp<T> {
-    fn new() -> Resp<T> {
-        Resp {
-            marker: std::marker::PhantomData,
-        }
-    }
-
     fn ty(&self, v: T) -> T {
         v
     }
@@ -58,6 +52,44 @@ impl<T> DerefMut for WithFramedSource<T> {
         &mut self.0
     }
 }
+
+pub trait Stream {
+    fn stream(&self, read: &mut impl Read, write: &mut impl Write) -> anyhow::Result<()>;
+}
+
+impl<T> Stream for WithFramedSource<T> {
+    fn stream(&self, read: &mut impl Read, write: &mut impl Write) -> anyhow::Result<()> {
+        let mut de = crate::serialize::NixDeserializer { read };
+        let mut ser = crate::serialize::NixSerializer { write };
+        const BUF_SIZE: usize = 4096;
+        let mut buf = vec![0; BUF_SIZE];
+
+        loop {
+            let mut len = u64::deserialize(&mut de)? as usize;
+            eprintln!("streaming {len} bytes");
+            (len as u64).serialize(&mut ser)?;
+            if len == 0 {
+                break;
+            }
+            while len > 0 {
+                let chunk_len = len.min(BUF_SIZE);
+                de.read.read_exact(&mut buf[..chunk_len])?;
+                ser.write.write_all(&buf[..chunk_len])?;
+                len -= chunk_len;
+            }
+        }
+        Ok(())
+    }
+}
+
+impl<T> Stream for Plain<T> {
+    fn stream(&self, _read: &mut impl Read, _write: &mut impl Write) -> anyhow::Result<()> {
+        Ok(())
+    }
+}
+
+// TODO
+// impl Stream for Nar {}
 
 /// The different worker ops.
 ///
@@ -160,67 +192,25 @@ macro_rules! for_each_op {
     };
 }
 
-impl WorkerOp {
-    /// Reads a worker op from the wire protocol.
-    pub fn read(mut r: impl Read) -> Result<Self> {
-        let op: WorkerOp = r.read_nix()?;
-
-        // After reading AddToStore, Nix reads from a FramedSource. Since we're
-        // temporarily putting the FramedSource in the AddToStore, read it here.
-        //
-        // This will also need to be handled in AddMultipleToStore, AddToStoreNar,
-        // and AddBuildLog.
-
-        match op {
-            WorkerOp::AddToStore(mut add, _) => {
-                add.framed = FramedData::read(&mut r)?;
-                Ok(WorkerOp::AddToStore(add, Resp::new()))
-            }
-            WorkerOp::AddToStoreNar(mut add, _) => {
-                add.framed = FramedData::read(&mut r)?;
-
-                // We don't actually need to parse the NAR but we want to
-                // exercise our NAR serializing and deserializing code
-                let data: Vec<_> = add
-                    .framed
-                    .data
-                    .iter()
-                    .flat_map(|v| v.iter().cloned())
-                    .collect();
-                let nar: Nar = Cursor::new(&data).read_nix()?;
-                let mut buf = Vec::new();
-                buf.write_nix(&nar).unwrap();
-                if buf != data {
-                    panic!("failed to round-trip NAR");
+impl Stream for WorkerOp {
+    fn stream(&self, read: &mut impl Read, write: &mut impl Write) -> anyhow::Result<()> {
+        eprintln!("streaming worker op");
+        macro_rules! stream {
+            ($($name:ident),*) => {
+                match self {
+                    $(WorkerOp::$name(op, _resp) => {
+                        op.stream(read, write)?;
+                    },)*
                 }
-                Ok(WorkerOp::AddToStoreNar(add, Resp::new()))
-            }
-            WorkerOp::AddMultipleToStore(mut add, _) => {
-                add.framed = FramedData::read(&mut r)?;
-                Ok(WorkerOp::AddMultipleToStore(add, Resp::new()))
-            }
-            WorkerOp::AddBuildLog(mut add, _) => {
-                add.framed = FramedData::read(&mut r)?;
-                Ok(WorkerOp::AddBuildLog(add, Resp::new()))
-            }
-            _ => Ok(op),
+            };
         }
-    }
 
-    pub fn write(&self, mut write: impl Write) -> Result<()> {
-        write.write_nix(self)?;
-
-        // See the comment in WorkerOp::read
-        match self {
-            WorkerOp::AddToStore(add, _resp) => add.framed.write(write)?,
-            WorkerOp::AddToStoreNar(add, _resp) => add.framed.write(write)?,
-            WorkerOp::AddMultipleToStore(add, _resp) => add.framed.write(write)?,
-            WorkerOp::AddBuildLog(add, _resp) => add.framed.write(write)?,
-            _ => (),
-        }
+        for_each_op!(stream!);
         Ok(())
     }
+}
 
+impl WorkerOp {
     pub fn proxy_response(&self, mut read: impl Read, mut write: impl Write) -> Result<()> {
         let mut logging_read = crate::printing_read::PrintingRead {
             buf: Vec::new(),
@@ -236,7 +226,13 @@ impl WorkerOp {
         };
         macro_rules! respond {
             ($($name:ident),*) => {
+                //#[allow(unreachable_patterns)]
                 match self {
+                    //WorkerOp::NarFromPath(_inner, resp) => {
+                        // TODO
+                        // special case for streaming the response
+                        // reply.stream(&mut deser.read, &mut ser.write)?;
+                    //}
                     $(WorkerOp::$name(_inner, resp) => {
                         let reply = resp.ty(<_>::deserialize(&mut deser)?);
                         eprintln!("read reply {reply:?}");
@@ -305,11 +301,6 @@ pub struct AddToStore {
     pub cam_str: StorePath,
     pub refs: StorePathSet,
     pub repair: bool,
-    // TODO: This doesn't really belong here. It shouldn't be read as part of a
-    // worker op: it should really be streamed.
-    // TODO: remove this, and use the WithFramedSource/Plain wrappers instead.
-    #[serde(skip)]
-    framed: FramedData,
 }
 
 #[derive(Debug, Clone, Copy, TaggedSerde)]
@@ -445,11 +436,6 @@ pub struct AddToStoreNar {
     pub content_address: RenderedContentAddress,
     pub repair: bool,
     pub dont_check_sigs: bool,
-
-    // TODO: This doesn't really belong here. It shouldn't be read as part of a
-    // worker op: it should really be streamed.
-    #[serde(skip)]
-    framed: FramedData,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -467,11 +453,6 @@ pub struct QueryValidPaths {
 pub struct AddMultipleToStore {
     pub repair: bool,
     pub dont_check_sigs: bool,
-
-    // TODO: This doesn't really belong here. It shouldn't be read as part of a
-    // worker op: it should really be streamed.
-    #[serde(skip)]
-    framed: FramedData,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -503,8 +484,6 @@ pub struct AddSignatures {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct AddBuildLog {
     pub path: StorePath,
-    #[serde(skip)]
-    framed: FramedData,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

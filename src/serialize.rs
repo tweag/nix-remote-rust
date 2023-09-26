@@ -72,7 +72,6 @@ pub trait NixReadExt {
 
 impl<R: Read> NixReadExt for R {
     fn read_nix<'de, 'a: 'de, D: serde::Deserialize<'de>>(&'a mut self) -> Result<D> {
-        eprintln!("read nix");
         D::deserialize(&mut NixDeserializer { read: self })
     }
 }
@@ -292,7 +291,6 @@ impl<'de, 'a> de::Deserializer<'de> for &'a mut NixDeserializer<'de> {
     where
         V: de::Visitor<'de>,
     {
-        eprintln!("unit");
         visitor.visit_unit()
     }
 
@@ -333,7 +331,6 @@ impl<'de, 'a> de::Deserializer<'de> for &'a mut NixDeserializer<'de> {
     where
         V: de::Visitor<'de>,
     {
-        eprintln!("tuple");
         visitor.visit_seq(Seq {
             deserializer: self,
             len,
