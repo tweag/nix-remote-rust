@@ -29,8 +29,8 @@ impl Default for Nar {
 // we could use it here
 #[derive(Clone, Debug)]
 pub struct NarDirectoryEntry {
-    name: NixString,
-    node: Nar,
+    pub name: NixString,
+    pub node: Nar,
 }
 
 trait EntrySink<'a>: 'a {
@@ -182,6 +182,7 @@ trait SerializeTupleExt: SerializeTuple {
 
 impl<S: SerializeTuple> SerializeTupleExt for S {}
 
+// A trait that lets you read strings one-by-one in the Nix wire format.
 trait StringReader<'a> {
     type Error: serde::de::Error;
 
@@ -198,6 +199,10 @@ trait StringReader<'a> {
         }
     }
 
+    // A "streaming" version of `expect_string` that might be optimized for long strings.
+    //
+    // The default impl doesn't do any streaming, it just reads the string into memory using
+    // `expect_string` and then writes it out again.
     fn write_string(&mut self, mut write: impl std::io::Write) -> Result<(), Self::Error> {
         write
             .write_all(&self.expect_string()?.0)
@@ -310,6 +315,14 @@ impl<'v> StringReader<'v> for NixDeserializer<'v> {
     }
 }
 
+/// Stream a Nar from a reader to a writer.
+///
+// The tricky part is that a Nar isn't framed; in order to know when it ends,
+// we actually have to parse the thing. But we don't want to parse and then
+// re-serialize it, because we don't want to hold the whole thing in memory. So
+// what we do is to parse it into a dummy `EntrySink` (just so we know when the
+// Nar ends) while using a `Tee` to simultaneously write the consumed input into
+// the output.
 pub fn stream<R: std::io::Read, W: std::io::Write>(
     read: R,
     write: W,

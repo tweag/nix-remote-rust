@@ -133,7 +133,6 @@ pub enum WorkerOp {
     BuildDerivation(Plain<BuildDerivation>, Resp<BuildResult>),
     #[tagged_serde = 37]
     AddSignatures(Plain<AddSignatures>, Resp<u64>),
-    // FIXME: this will need to stream the response
     #[tagged_serde = 38]
     NarFromPath(Plain<StorePath>, Resp<Nar>),
     #[tagged_serde = 39]
