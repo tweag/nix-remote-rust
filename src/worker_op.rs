@@ -88,9 +88,6 @@ impl<T> Stream for Plain<T> {
     }
 }
 
-// TODO
-// impl Stream for Nar {}
-
 /// The different worker ops.
 ///
 /// On the wire, they are represented as the opcode followed by the body.
@@ -226,13 +223,13 @@ impl WorkerOp {
         };
         macro_rules! respond {
             ($($name:ident),*) => {
-                //#[allow(unreachable_patterns)]
+                #[allow(unreachable_patterns)]
                 match self {
-                    //WorkerOp::NarFromPath(_inner, resp) => {
-                        // TODO
-                        // special case for streaming the response
-                        // reply.stream(&mut deser.read, &mut ser.write)?;
-                    //}
+                    // Special case for NarFromPath because the response could be large
+                    // and needs to be streamed instead of read into memory.
+                    WorkerOp::NarFromPath(_inner, _resp) => {
+                      crate::nar::stream(&mut deser.read, &mut ser.write)?;
+                    }
                     $(WorkerOp::$name(_inner, resp) => {
                         let reply = resp.ty(<_>::deserialize(&mut deser)?);
                         eprintln!("read reply {reply:?}");
@@ -240,8 +237,8 @@ impl WorkerOp {
                         reply.serialize(&mut dbg_ser)?;
                         if dbg_buf != logging_read.buf {
                             eprintln!("mismatch!");
-                            eprintln!("{dbg_buf:?}");
-                            eprintln!("{:?}", logging_read.buf);
+                            eprintln!("{:?}", &logging_read.buf[0..500]);
+                            eprintln!("{:?}", &dbg_buf[0..500]);
                             panic!();
                         }
                         reply.serialize(&mut ser)?;

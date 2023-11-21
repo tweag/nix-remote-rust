@@ -2,12 +2,9 @@ use serde::{de::SeqAccess, ser::SerializeTuple, Deserialize, Serialize};
 use serde_bytes::ByteBuf;
 
 use crate::{
-    serialize::{NixDeserializer, NixSerializer},
+    serialize::{NixDeserializer, Tee},
     NixString,
 };
-
-#[derive(Clone, Debug)]
-pub struct Nar(NarEntry);
 
 #[derive(Clone, Debug, Default)]
 pub struct NarFile {
@@ -16,10 +13,16 @@ pub struct NarFile {
 }
 
 #[derive(Clone, Debug)]
-pub enum NarEntry {
+pub enum Nar {
     Contents(NarFile),
     Target(NixString),
     Directory(Vec<NarDirectoryEntry>),
+}
+
+impl Default for Nar {
+    fn default() -> Nar {
+        Nar::Contents(NarFile::default())
+    }
 }
 
 // TODO: if tagged_serde supported tagging with arbitrary ser/de types,
@@ -27,176 +30,90 @@ pub enum NarEntry {
 #[derive(Clone, Debug)]
 pub struct NarDirectoryEntry {
     name: NixString,
-    node: NarEntry,
-}
-
-trait EntryCallback<'a, S: EntrySink<'a>> {
-    fn call(self, val: S);
+    node: Nar,
 }
 
 trait EntrySink<'a>: 'a {
     type DirectorySink: DirectorySink<'a>;
     type FileSink: FileSink;
-    // this could get threaded through to write out the )s
-    // type Context;
 
     fn become_directory(self) -> Self::DirectorySink;
     fn become_file(self) -> Self::FileSink;
     fn become_symlink(self, target: NixString);
 }
 
+// The workaround for
+// https://github.com/rust-lang/rust/issues/87479
 trait DirectorySinkSuper {
     type EntrySink<'b>: EntrySink<'b>;
 }
 
 trait DirectorySink<'a>: DirectorySinkSuper {
-    // The extra bounds are because of
-    // https://github.com/rust-lang/rust/issues/87479
-    // type EntrySink<'b>: EntrySink<'b>
-    // where
-    //     Self: 'a,
-    //     'a: 'b,
-    //     Self: 'b;
-
-    // fn create_entry<'b>(&'b mut self, ctx: Self::Context, name: NixString) -> Self::EntrySink<'b>
-    // where
-    //     'a: 'b;
-
-    fn with_entry<'b, C>(&'b mut self, name: NixString, callback: C)
+    fn create_entry<'b>(&'b mut self, name: NixString) -> Self::EntrySink<'b>
     where
-        Self: 'a,
-        'a: 'b,
-        C: for<'c> EntryCallback<'c, Self::EntrySink<'c>>;
-
-    //
+        'a: 'b;
 }
 
-trait FileSink {
+trait FileSink: std::io::Write {
     fn set_executable(&mut self, executable: bool);
     fn add_contents(&mut self, contents: &[u8]);
 }
 
-impl<'a> EntrySink<'a> for NixSerializer<'a> {
-    type DirectorySink = Self;
-
-    type FileSink = Self;
-
-    fn become_directory(mut self) -> Self::DirectorySink {
-        (&mut self).serialize_buf(b"directory").unwrap();
-        self
-    }
-
-    fn become_file(self) -> Self::FileSink {
-        (&mut self).serialize_buf(b"regular").unwrap();
-        if *executable {
-            (&mut self).serialize_buf(b"executable").unwrap();
-            (&mut self).serialize_buf(b"").unwrap();
-        }
-        (&mut self).serialize_buf(b"contents").unwrap();
-    }
-
-    fn become_symlink(self, target: NixString) {
-        todo!()
-    }
-}
-
-impl<'a> DirectorySinkSuper for NixSerializer<'a> {
-    type EntrySink<'b> = NixSerializer<'b>;
-}
-
-impl<'a> DirectorySink<'a> for NixSerializer<'a> {
-    // type EntrySink<'b> = NixSerializer<'b>
-    // where
-    //     Self: 'a,
-    //     'a: 'b,
-    //     Self: 'b;
-
-    // fn create_entry<'b>(&'b mut self, name: NixString) -> Self::EntrySink<'b>
-    // where
-    //     'a: 'b,
-    // {
-    //     // Note that we need to write out a ) after the entry is done. The trait might need a commit function.
-    //     todo!()
-    // }
-
-    fn with_entry<'b, C>(&'b mut self, name: NixString, callback: C)
-    where
-        Self: 'a,
-        'a: 'b,
-        C: for<'c> EntryCallback<'c, Self::EntrySink<'c>>,
-    {
-        (&mut *self).serialize_buf(b"entry").unwrap();
-        (&mut *self).serialize_buf(b"(").unwrap();
-        (&mut *self).serialize_buf(b"name").unwrap();
-        (&mut *self).serialize_element(&name).unwrap();
-        (&mut *self).serialize_buf(b"node").unwrap();
-        {
-            let x = NixSerializer {
-                write: &mut *self.write,
-            };
-            callback.call(x);
-        }
-        (&mut *self).serialize_buf(b")").unwrap();
-        todo!()
-    }
-}
-
-impl<'a> FileSink for NixSerializer<'a> {
-    fn set_executable(&mut self, executable: bool) {
-        todo!()
-    }
-
-    fn add_contents(&mut self, contents: &[u8]) {
-        todo!()
-    }
-}
-
-impl<'a> EntrySink<'a> for &'a mut NarEntry {
+impl<'a> EntrySink<'a> for &'a mut Nar {
     type DirectorySink = &'a mut Vec<NarDirectoryEntry>;
     type FileSink = &'a mut NarFile;
 
     fn become_directory(self) -> Self::DirectorySink {
-        *self = NarEntry::Directory(Vec::new());
-        let NarEntry::Directory(dir) = self else { unreachable!() };
+        *self = Nar::Directory(Vec::new());
+        let Nar::Directory(dir) = self else { unreachable!() };
         dir
     }
 
     fn become_file(self) -> Self::FileSink {
-        *self = NarEntry::Contents(NarFile {
+        *self = Nar::Contents(NarFile {
             executable: false,
             contents: NixString::default(),
         });
         // TODO: can we express this better?
-        let NarEntry::Contents(contents) = self else {
+        let Nar::Contents(contents) = self else {
             unreachable!()
         };
         contents
     }
 
     fn become_symlink(self, target: NixString) {
-        *self = NarEntry::Target(target);
+        *self = Nar::Target(target);
     }
 }
 
 impl<'a> DirectorySinkSuper for &'a mut Vec<NarDirectoryEntry> {
-    type EntrySink<'b> = &'b mut NarEntry;
+    type EntrySink<'b> = &'b mut Nar;
 }
 
 impl<'a> DirectorySink<'a> for &'a mut Vec<NarDirectoryEntry> {
-    fn with_entry<'b, C>(&'b mut self, name: NixString, callback: C)
+    fn create_entry<'b>(&'b mut self, name: NixString) -> Self::EntrySink<'b>
     where
-        Self: 'a,
         'a: 'b,
-        C: for<'c> EntryCallback<'c, Self::EntrySink<'c>>,
     {
         self.push(NarDirectoryEntry {
             name,
-            node: NarEntry::Contents(NarFile {
+            node: Nar::Contents(NarFile {
                 contents: NixString::default(),
                 executable: false,
             }),
         });
-        callback.call(&mut self.last_mut().unwrap().node)
+        &mut self.last_mut().unwrap().node
+    }
+}
+
+impl<'a> std::io::Write for &'a mut NarFile {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        self.add_contents(buf);
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
     }
 }
 
@@ -210,6 +127,53 @@ impl<'a> FileSink for &'a mut NarFile {
     }
 }
 
+#[derive(Default)]
+struct Null;
+
+impl<'a> std::io::Write for &'a mut Null {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+impl<'a> FileSink for &'a mut Null {
+    fn set_executable(&mut self, _executable: bool) {}
+
+    fn add_contents(&mut self, _contents: &[u8]) {}
+}
+
+impl<'a> EntrySink<'a> for &'a mut Null {
+    type DirectorySink = &'a mut Null;
+    type FileSink = &'a mut Null;
+
+    fn become_directory(self) -> Self::DirectorySink {
+        self
+    }
+
+    fn become_file(self) -> Self::FileSink {
+        self
+    }
+
+    fn become_symlink(self, _target: NixString) {}
+}
+
+impl<'a> DirectorySinkSuper for &'a mut Null {
+    type EntrySink<'b> = &'b mut Null;
+}
+
+impl<'a> DirectorySink<'a> for &'a mut Null {
+    fn create_entry<'b>(&'b mut self, _name: NixString) -> Self::EntrySink<'b>
+    where
+        'a: 'b,
+    {
+        self
+    }
+}
+
 trait SerializeTupleExt: SerializeTuple {
     fn serialize_buf(&mut self, s: impl AsRef<[u8]>) -> Result<(), Self::Error> {
         self.serialize_element(&ByteBuf::from(s.as_ref()))
@@ -218,71 +182,61 @@ trait SerializeTupleExt: SerializeTuple {
 
 impl<S: SerializeTuple> SerializeTupleExt for S {}
 
-impl Serialize for Nar {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: serde::Serializer,
-    {
-        let mut tup = serializer.serialize_tuple(usize::MAX)?;
-        tup.serialize_buf(b"nix-archive-1")?;
-        tup.serialize_element(&self.0)?;
-        tup.end()
+trait StringReader<'a> {
+    type Error: serde::de::Error;
+
+    fn expect_string(&mut self) -> Result<NixString, Self::Error>;
+
+    fn expect_tag(&mut self, s: &str) -> Result<(), Self::Error> {
+        let tag = self.expect_string()?;
+        if tag.0 != s.as_bytes() {
+            Err(serde::de::Error::custom(format!(
+                "got {tag:?} instead of `{s}`"
+            )))
+        } else {
+            Ok(())
+        }
+    }
+
+    fn write_string(&mut self, mut write: impl std::io::Write) -> Result<(), Self::Error> {
+        write
+            .write_all(&self.expect_string()?.0)
+            .map_err(|e| serde::de::Error::custom(format!("io error: {e}")))
     }
 }
 
-fn expect_tag<'v, A: SeqAccess<'v>>(seq: &mut A, s: &str) -> Result<(), A::Error> {
-    let tag = expect_string(seq)?;
-    if tag.0 != s.as_bytes() {
-        Err(serde::de::Error::custom(format!(
-            "got {tag:?} instead of `{s}`"
-        )))
-    } else {
-        Ok(())
+impl<'v, A: SeqAccess<'v>> StringReader<'v> for A {
+    type Error = A::Error;
+
+    fn expect_string(&mut self) -> Result<NixString, Self::Error> {
+        self.next_element()
+            .transpose()
+            .unwrap_or_else(|| Err(serde::de::Error::custom("unexpected end")))
     }
 }
 
-fn expect_string<'v, A: SeqAccess<'v>>(seq: &mut A) -> Result<NixString, A::Error> {
-    seq.next_element()
-        .transpose()
-        .unwrap_or_else(|| Err(serde::de::Error::custom("unexpected end")))
-}
-
-struct ECallback<'w, 'v, A: SeqAccess<'v>>(&'w mut A, core::marker::PhantomData<&'v mut ()>);
-
-impl<'w, 'v, 'c, A: SeqAccess<'v>, S: EntrySink<'c> + 'c> EntryCallback<'c, S>
-    for ECallback<'w, 'v, A>
-{
-    fn call(self, entry: S) {
-        expect_tag(self.0, "node").unwrap();
-        read_entry(self.0, entry).unwrap();
-        expect_tag(self.0, ")").unwrap();
-    }
-}
-
-fn read_entry<'v, 's, A: SeqAccess<'v>, S: EntrySink<'s> + 's>(
+fn read_entry<'v, 's, A: StringReader<'v>, S: EntrySink<'s> + 's>(
     seq: &mut A,
     sink: S,
 ) -> Result<(), A::Error> {
-    expect_tag(seq, "(")?;
-    expect_tag(seq, "type")?;
-    let ty = expect_string(seq)?;
+    seq.expect_tag("(")?;
+    seq.expect_tag("type")?;
+    let ty = seq.expect_string()?;
     match ty.0.as_slice() {
         b"regular" => {
             let mut file = sink.become_file();
             // This probably doesn't happen, but the nix source allows multiple settings of "executable"
-            let mut tag = expect_string(seq)?;
+            let mut tag = seq.expect_string()?;
             while tag.0 == b"executable" {
                 // Nix expects an empty string
-                expect_tag(seq, "")?;
+                seq.expect_tag("")?;
                 file.set_executable(true);
-                tag = expect_string(seq)?
+                tag = seq.expect_string()?
             }
 
             if tag.0 == "contents" {
-                // TODO: can also read the contents in chunks
-                let contents = expect_string(seq)?;
-                expect_tag(seq, ")")?;
-                file.add_contents(&contents.0);
+                seq.write_string(file)?;
+                seq.expect_tag(")")?;
                 Ok(())
             } else if tag.0 == ")" {
                 Ok(())
@@ -293,23 +247,26 @@ fn read_entry<'v, 's, A: SeqAccess<'v>, S: EntrySink<'s> + 's>(
             }
         }
         b"symlink" => {
-            expect_tag(seq, "target")?;
-            let target = expect_string(seq)?;
-            expect_tag(seq, ")")?;
+            seq.expect_tag("target")?;
+            let target = seq.expect_string()?;
+            seq.expect_tag(")")?;
             sink.become_symlink(target);
             Ok(())
         }
         b"directory" => {
             let mut dir = sink.become_directory();
             loop {
-                let tag = expect_string(seq)?;
+                let tag = seq.expect_string()?;
                 if tag.0 == ")" {
                     break Ok(());
                 } else if tag.0 == "entry" {
-                    expect_tag(seq, "(")?;
-                    expect_tag(seq, "name")?;
-                    let name = expect_string(seq)?;
-                    dir.with_entry(name, ECallback(seq, core::marker::PhantomData));
+                    seq.expect_tag("(")?;
+                    seq.expect_tag("name")?;
+                    let name = seq.expect_string()?;
+                    let entry = dir.create_entry(name);
+                    seq.expect_tag("node")?;
+                    read_entry(seq, entry)?;
+                    seq.expect_tag(")")?;
                 } else {
                     break Err(serde::de::Error::custom(format!(
                         "expected entry, got {tag:?}"
@@ -321,6 +278,47 @@ fn read_entry<'v, 's, A: SeqAccess<'v>, S: EntrySink<'s> + 's>(
             "unknown file type `{v:?}`"
         ))),
     }
+}
+
+impl<'v> StringReader<'v> for NixDeserializer<'v> {
+    type Error = crate::serialize::Error;
+
+    fn expect_string(&mut self) -> Result<NixString, Self::Error> {
+        NixString::deserialize(self)
+    }
+
+    fn write_string(
+        &mut self,
+        mut write: impl std::io::Write,
+    ) -> Result<(), crate::serialize::Error> {
+        let len = self.read_u64()? as usize;
+        let mut buf = [0; 4096];
+        let mut remaining = len;
+        while remaining > 0 {
+            let max_len = buf.len().min(remaining);
+            let written = self.read.read(&mut buf[0..max_len])?;
+            write.write_all(&buf[0..written])?;
+
+            remaining -= written;
+        }
+
+        if len % 8 > 0 {
+            let padding = 8 - len % 8;
+            self.read.read_exact(&mut buf[..padding])?;
+        }
+        Ok(())
+    }
+}
+
+pub fn stream<R: std::io::Read, W: std::io::Write>(
+    read: R,
+    write: W,
+) -> Result<(), crate::serialize::Error> {
+    let mut tee = Tee::new(read, write);
+    let mut de = NixDeserializer { read: &mut tee };
+    de.expect_tag("nix-archive-1")?;
+    read_entry(&mut de, &mut Null)?;
+    Ok(())
 }
 
 impl<'de> Deserialize<'de> for Nar {
@@ -338,10 +336,10 @@ impl<'de> Deserialize<'de> for Nar {
             }
 
             fn visit_seq<A: SeqAccess<'v>>(self, mut seq: A) -> Result<Nar, A::Error> {
-                expect_tag(&mut seq, "nix-archive-1")?;
-                let mut entry = NarEntry::Contents(NarFile::default());
+                seq.expect_tag("nix-archive-1")?;
+                let mut entry = Nar::default();
                 read_entry(&mut seq, &mut entry)?;
-                Ok(Nar(entry))
+                Ok(entry)
             }
         }
 
@@ -349,7 +347,21 @@ impl<'de> Deserialize<'de> for Nar {
     }
 }
 
-impl Serialize for NarEntry {
+impl Serialize for Nar {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        let mut tup = serializer.serialize_tuple(usize::MAX)?;
+        tup.serialize_buf(b"nix-archive-1")?;
+        tup.serialize_element(&Untagged(self))?;
+        tup.end()
+    }
+}
+
+struct Untagged<T>(T);
+
+impl<'a> Serialize for Untagged<&'a Nar> {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
         S: serde::Serializer,
@@ -357,8 +369,8 @@ impl Serialize for NarEntry {
         let mut tup = serializer.serialize_tuple(usize::MAX)?;
         tup.serialize_buf(b"(")?;
         tup.serialize_buf(b"type")?;
-        match self {
-            NarEntry::Contents(NarFile {
+        match self.0 {
+            Nar::Contents(NarFile {
                 contents,
                 executable,
             }) => {
@@ -370,12 +382,12 @@ impl Serialize for NarEntry {
                 tup.serialize_buf(b"contents")?;
                 tup.serialize_element(&contents)?;
             }
-            NarEntry::Target(s) => {
+            Nar::Target(s) => {
                 tup.serialize_buf(b"symlink")?;
                 tup.serialize_buf(b"target")?;
                 tup.serialize_element(s)?;
             }
-            NarEntry::Directory(entries) => {
+            Nar::Directory(entries) => {
                 tup.serialize_buf(b"directory")?;
                 for entry in entries {
                     tup.serialize_buf(b"entry")?;
@@ -383,7 +395,7 @@ impl Serialize for NarEntry {
                     tup.serialize_buf(b"name")?;
                     tup.serialize_element(&entry.name)?;
                     tup.serialize_buf(b"node")?;
-                    tup.serialize_element(&entry.node)?;
+                    tup.serialize_element(&Untagged(&entry.node))?;
                     tup.serialize_buf(b")")?;
                 }
             }

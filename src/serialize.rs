@@ -36,6 +36,25 @@ use std::io::{Read, Write};
 
 use serde::{de, ser, Serialize};
 
+pub struct Tee<R, W> {
+    read: R,
+    write: W,
+}
+
+impl<R: Read, W: Write> Tee<R, W> {
+    pub fn new(read: R, write: W) -> Self {
+        Tee { read, write }
+    }
+}
+
+impl<R: Read, W: Write> Read for Tee<R, W> {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        let n = self.read.read(buf)?;
+        self.write.write_all(&buf[0..n])?;
+        Ok(n)
+    }
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
     #[error("Won't implement {0}")]
