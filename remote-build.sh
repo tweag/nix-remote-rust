@@ -14,6 +14,7 @@ chmod -R +w $TEST_ROOT/local || true
 rm -rf $TEST_ROOT/local/* || true
 
 nix build -L -v -o result --max-jobs 0 \
+ --option builders-use-substitutes true \
  --expr '(builtins.getFlake "nixpkgs").legacyPackages.${builtins.currentSystem}.writeText "current-time" "${builtins.toString builtins.currentTime}"' \
  --store $TEST_ROOT/local \
  --builders "$builder" --impure

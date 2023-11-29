@@ -29,3 +29,20 @@ https://github.com/bazelbuild/remote-apis/blob/main/build/bazel/remote/execution
 
 - enum for operations
 - wire protocol
+
+## bazel RE protocol
+
+- on EnsurePath we could do substitution (using the blob cache). Why do we sometimes get AddToStore and sometimes EnsurePath?
+- build an adaptation from nix store <-> bazel ca store
+  it seems like nix calls AddToStore in dependency order, giving us the content each time, so we can compute the ca hashes
+- encode a nix store path as an action in the action cache (action cache maps from the input hash of a build action to
+  its output hashes)
+- nix store queries can be turned into bazel actions
+
+- using nix as a remote builder seems much easier. From a clean nix store, the ops go:
+  - QueryValidPaths for the paths we want. Returns empty (when builders_use_substitutes is true, the builder does the downloading and returns the full set of paths)
+  - AddMultipleToStore for adding everything
+  - BuildDerivation build everything
+  - QueryPathInfo
+
+

@@ -5,5 +5,6 @@ cd /home/jneeman/tweag/nix-remote-rust
 # cargo build > /dev/null 2>&1
 
 export RUST_BACKTRACE=1
+export NIX_REMOTE=/home/jneeman/tweag/nix-remote-rust/test-remote-store/remote
 
-./target/debug/nix-remote 2> /tmp/nix-remote-rust.log
+./target/debug/nix-remote 2>> /tmp/nix-remote-rust.log
