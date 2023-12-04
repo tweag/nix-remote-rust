@@ -149,47 +149,12 @@ pub fn derive(input: TokenStream) -> TokenStream {
                 }
 
                 // TODO: make it a tuple with 2 fields: (tag, rest)
+                // We don't know yet how many fields to expect. We're abusing
+                // the fact that the nix serde implementation doesn't actually
+                // look at the size of the tuple.
                 deserializer.deserialize_tuple(usize::MAX, Visitor)
             }
         }
     };
     output.into()
 }
-
-// #[actor(msg = Blah, handle = Foo)]
-//  #[serde_tag = blah]
-
-/*
-struct TaggedEnum {
-    tags: BTreeMap<String, u64>,
-}
-
-impl Parse for TaggedEnum {
-    fn parse(input: syn::parse::ParseStream) -> syn::Result<Self> {
-        let original = input.parse::<ItemEnum>()?;
-
-        Ok(TaggedEnum {
-            tags: BTreeMap::new(),
-        })
-    }
-}
-
-struct VariantLabel {
-    tag: u64,
-}
-
-impl Parse for VariantLabel {
-    fn parse(input: syn::parse::ParseStream) -> syn::Result<Self> {
-        let key = input.parse::<Ident>()?;
-        if key != "tag" {
-            return Err(syn::Error::new_spanned(key, format!("expected \"tag\"")));
-        }
-        input.parse::<Token![=]>()?;
-        let value = input.parse::<LitInt>()?;
-
-        Ok(VariantLabel {
-            tag: value.base10_parse()?,
-        })
-    }
-}
-*/

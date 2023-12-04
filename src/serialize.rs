@@ -18,7 +18,7 @@
 //! ```ignore
 //! pub struct BuildPathsWithResults {
 //!     paths: Vec<ByteBuf>,
-//!    build_mode: u64,
+//!     build_mode: u64,
 //! }
 //! ```
 //! gets serde-derived serialization implementations that encode it as:
@@ -29,8 +29,9 @@
 //! - the build mode (an int)
 //!
 //! Nix also has some sort of implicit "tagged union", consisting of a type tag (and integer)
-//! followed by a body. We do not yet handle this declaratively, although we should. See
-//! [`crate::WorkerOp`] for an example.
+//! followed by a body. This serializer does not have built-in support for that, because serde
+//! enums are built on string-valued tags (whereas the nix protocol wants integer tags).
+//! Instead, we have a separate `tagged_serde` macro for transforming enums into tuples.
 
 use std::io::{Read, Write};
 
@@ -83,9 +84,9 @@ impl ser::Error for Error {
     }
 }
 
-type Result<T, E = Error> = std::result::Result<T, E>;
+pub type Result<T, E = Error> = std::result::Result<T, E>;
 
-pub trait NixReadExt {
+pub(crate) trait NixReadExt {
     fn read_nix<'de, 'a: 'de, D: serde::Deserialize<'de>>(&'a mut self) -> Result<D>;
 }
 
@@ -95,7 +96,7 @@ impl<R: Read> NixReadExt for R {
     }
 }
 
-pub trait NixWriteExt {
+pub(crate) trait NixWriteExt {
     fn write_nix(&mut self, val: &impl Serialize) -> Result<()>;
 }
 
@@ -169,6 +170,23 @@ impl<'de> NixDeserializer<'de> {
         }
 
         Ok(buf)
+    }
+}
+
+impl<'se> NixSerializer<'se> {
+    pub fn write_byte_buf(&mut self, s: &[u8]) -> Result<()> {
+        let len = s.len();
+
+        self.write.write_all(&len.to_le_bytes())?;
+        self.write.write_all(s)?;
+
+        if len % 8 > 0 {
+            let padding = 8 - len % 8;
+            let pad_buf = [0; 8];
+            self.write.write_all(&pad_buf[..padding])?;
+        };
+
+        Ok(())
     }
 }
 
@@ -616,18 +634,7 @@ impl<'se> serde::Serializer for &mut NixSerializer<'se> {
     }
 
     fn serialize_bytes(self, v: &[u8]) -> Result<Self::Ok, Self::Error> {
-        let len = v.len();
-
-        self.write.write_all(&len.to_le_bytes())?;
-        self.write.write_all(v)?;
-
-        if len % 8 > 0 {
-            let padding = 8 - len % 8;
-            let pad_buf = [0; 8];
-            self.write.write_all(&pad_buf[..padding])?;
-        };
-
-        Ok(())
+        self.write_byte_buf(v)
     }
 
     fn serialize_none(self) -> Result<Self::Ok, Self::Error> {

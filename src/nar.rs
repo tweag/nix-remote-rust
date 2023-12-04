@@ -1,3 +1,10 @@
+//! The Nar archive format.
+//!
+//! The [`Nar`] struct represents a nar archive (essentially a directory tree) in memory.
+//! Since these can be large, it is often preferred to avoid buffering an entire nar in
+//! memory; the `stream` function allows for streaming a `Nar` (represented in the nix wire
+//! format) from a `std::io::Read` to a `std::io::Write`.
+
 use serde::{de::SeqAccess, ser::SerializeTuple, Deserialize, Serialize};
 use serde_bytes::ByteBuf;
 

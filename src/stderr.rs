@@ -1,3 +1,5 @@
+//! Log messages from the nix daemon.
+//!
 //! Nix propagates error messages from the daemon to the client using the following pattern:
 //! - the daemon reads a worker op from the client,
 //! - the daemon sends one or more stderr messages to the client. Each message consists of

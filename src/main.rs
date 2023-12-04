@@ -1,30 +1,9 @@
-use clap::Parser;
-use nix_remote::{NixProxy, NixReadWrite, NixStoreRead, NixStoreWrite};
-
-#[derive(Parser, Debug)]
-#[command()]
-struct Args {
-    /// Whether to proxy to nix
-    #[arg(long)]
-    proxy_to_nix: bool,
-}
+use nix_remote::NixProxy;
 
 fn main() {
-    //let args = Args::parse();
+    let mut proxy = NixProxy::new(std::io::stdin(), std::io::stdout());
 
-    let proxy = NixProxy::new();
-
-    let mut rw = NixReadWrite {
-        read: NixStoreRead {
-            inner: std::io::stdin(),
-        },
-        write: NixStoreWrite {
-            inner: std::io::stdout(),
-        },
-        proxy,
-    };
-
-    rw.process_connection(true).unwrap_or_else(|e| {
+    proxy.process_connection().unwrap_or_else(|e| {
         eprintln!("{e:?}");
     });
 }

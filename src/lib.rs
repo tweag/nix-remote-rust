@@ -1,22 +1,18 @@
 use anyhow::anyhow;
 use serde::{Deserialize, Serialize};
 use serde_bytes::ByteBuf;
-use std::io::{self, Read, Write};
+use serialize::NixSerializer;
+use std::io::{Read, Write};
 
 use worker_op::ValidPathInfo;
 
 pub mod framed_data;
 pub mod nar;
-pub mod printing_read;
 mod serialize;
 pub mod stderr;
 pub mod worker_op;
-use serialize::{NixDeserializer, NixSerializer};
-
-pub use framed_data::FramedData;
 
 use crate::{
-    printing_read::PrintingRead,
     serialize::{NixReadExt, NixWriteExt},
     worker_op::{Stream, WorkerOp},
 };
@@ -47,9 +43,10 @@ pub struct Path(pub NixString);
 #[serde(transparent)]
 pub struct DerivedPath(pub NixString);
 
-/// Strings in the nix protocol are not necessarily UTF-8.
+/// A string from nix.
 ///
-/// This type marks a byte buffer that's expected to be "stringy".
+/// Strings in the nix protocol are not necessarily UTF-8, so this is
+/// different from the rust standard `String`.
 #[derive(Deserialize, Serialize, Clone, PartialEq, Eq, Default)]
 #[serde(transparent)]
 pub struct NixString(pub ByteBuf);
@@ -67,12 +64,12 @@ const PROTOCOL_VERSION: DaemonVersion = DaemonVersion {
     minor: 34,
 };
 
-pub struct NixProxy {
+struct DaemonHandle {
     child_in: std::process::ChildStdin,
     child_out: std::process::ChildStdout,
 }
 
-impl NixProxy {
+impl DaemonHandle {
     pub fn new() -> Self {
         let mut child = std::process::Command::new("nix-daemon")
             .arg("--stdio")
@@ -86,74 +83,77 @@ impl NixProxy {
             child_out: child.stdout.take().unwrap(),
         }
     }
+}
 
-    pub fn write_u64(&mut self, n: u64) -> Result<()> {
-        self.child_in.write_all(&n.to_le_bytes())?;
-        Ok(())
-    }
-
-    pub fn read_u64(&mut self) -> Result<u64> {
-        let mut buf = [0u8; 8];
-        self.child_out.read_exact(&mut buf)?;
-        Ok(u64::from_le_bytes(buf))
-    }
-
-    pub fn flush(&mut self) -> Result<()> {
-        Ok(self.child_in.flush()?)
-    }
-
-    pub fn read_string(&mut self) -> Result<Vec<u8>> {
-        let mut deserializer = NixDeserializer {
-            read: &mut self.child_out,
-        };
-        let bytes = ByteBuf::deserialize(&mut deserializer)?;
-        Ok(bytes.into_vec())
+impl Default for DaemonHandle {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
-pub struct NixReadWrite<R, W> {
-    pub read: NixStoreRead<R>,
-    pub write: NixStoreWrite<W>,
-    pub proxy: NixProxy,
+/// A proxy to the nix daemon.
+///
+/// This doesn't currently *do* very much, it just inspects the protocol as it goes past.
+/// But it can be used to test our protocol implementation.
+pub struct NixProxy<R, W> {
+    pub read: NixRead<R>,
+    pub write: NixWrite<W>,
+    proxy: DaemonHandle,
 }
 
-pub struct NixStoreRead<R> {
+impl<R: Read, W: Write> NixProxy<R, W> {
+    pub fn new(r: R, w: W) -> Self {
+        Self {
+            read: NixRead { inner: r },
+            write: NixWrite { inner: w },
+            proxy: DaemonHandle::new(),
+        }
+    }
+}
+
+/// A wrapper around a `std::io::Read`, adding support for the nix wire format.
+pub struct NixRead<R> {
     pub inner: R,
 }
 
-pub struct NixStoreWrite<W> {
+/// A wrapper around a `std::io::Write`, adding support for the nix wire format.
+pub struct NixWrite<W> {
     pub inner: W,
 }
 
-/// The serialization format of PathSet and StorePathSet is the same, but there's a semantic
-/// difference: these paths are not in the store.
+/// A set of paths.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct PathSet {
-    // TODO: in nix, they call `parseStorePath` to separate store directory from path
     pub paths: Vec<Path>,
 }
 
+/// A set of store paths.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct StorePathSet {
     // TODO: in nix, they call `parseStorePath` to separate store directory from path
     pub paths: Vec<StorePath>,
 }
 
+/// A set of strings.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct StringSet {
-    // TODO: in nix, they call `parseStorePath` to separate store directory from path
     pub paths: Vec<NixString>,
 }
 
-pub type Realisation = NixString;
+/// A realisation.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct Realisation(pub NixString);
 
+/// A set of realisations.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct RealisationSet {
     pub realisations: Vec<Realisation>,
 }
 
+/// A nar hash.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct NarHash {
+    /// This data has not been validated; this is just copied from the wire.
     pub data: ByteBuf,
 }
 
@@ -163,46 +163,54 @@ pub struct ValidPathInfoWithPath {
     pub info: ValidPathInfo,
 }
 
-impl<R: Read> NixStoreRead<R> {
-    pub fn read_u64(&mut self) -> io::Result<u64> {
-        let mut buf = [0u8; 8];
-        self.inner.read_exact(&mut buf)?;
-        Ok(u64::from_le_bytes(buf))
+impl<R: Read> NixRead<R> {
+    /// Read an integer from the wire.
+    pub fn read_u64(&mut self) -> serialize::Result<u64> {
+        self.inner.read_nix()
+    }
+
+    /// Read a "string" (really, a byte buffer) from the wire.
+    pub fn read_string(&mut self) -> serialize::Result<NixString> {
+        self.inner.read_nix()
+    }
+
+    /// Read any serializable type from the wire.
+    pub fn read_nix(&mut self) -> serialize::Result<()> {
+        self.inner.read_nix()
     }
 }
 
-impl<W: Write> NixStoreWrite<W> {
-    fn write_u64(&mut self, n: u64) -> Result<()> {
-        self.inner.write_all(&n.to_le_bytes())?;
-        Ok(())
+impl<W: Write> NixWrite<W> {
+    /// Write an integer to the wire.
+    pub fn write_u64(&mut self, n: u64) -> serialize::Result<()> {
+        self.inner.write_nix(&n)
     }
 
-    fn write_string(&mut self, s: &[u8]) -> Result<()> {
-        self.write_u64(s.len() as _)?;
-        self.inner.write_all(s)?;
-
-        if s.len() % 8 > 0 {
-            let padding = 8 - s.len() % 8;
-            let pad_buf = [0; 8];
-            self.inner.write_all(&pad_buf[..padding])?;
-        }
-
-        Ok(())
-    }
-
-    fn write(&mut self, data: &impl Serialize) -> Result<()> {
-        data.serialize(&mut NixSerializer {
+    /// Write a "string" (really, a byte buffer) to the wire.
+    pub fn write_string(&mut self, s: &[u8]) -> serialize::Result<()> {
+        NixSerializer {
             write: &mut self.inner,
-        })?;
-        Ok(())
+        }
+        .write_byte_buf(s)
     }
 
-    fn flush(&mut self) -> Result<()> {
+    /// Write any serializable type to the wire.
+    ///
+    /// *Warning*: don't call this with `[u8]` data: that will (attempt to)
+    /// serialize a sequence of `u8`s, and then panic because the nix wire
+    /// protocol only supports 64-bit integers. If you want to write a byte
+    /// buffer, use [`NixWrite::write_string`] instead.
+    pub fn write_nix(&mut self, data: &impl Serialize) -> serialize::Result<()> {
+        self.inner.write_nix(data)
+    }
+
+    /// Flush the underlying writer.
+    pub fn flush(&mut self) -> Result<()> {
         Ok(self.inner.flush()?)
     }
 }
 
-impl<R: Read, W: Write> NixReadWrite<R, W> {
+impl<R: Read, W: Write> NixProxy<R, W> {
     // Wait for an initialization message from the client, and perform
     // the version negotiation.
     //
@@ -235,65 +243,53 @@ impl<R: Read, W: Write> NixReadWrite<R, W> {
         Ok(PROTOCOL_VERSION.into())
     }
 
+    fn forward_stderr(&mut self) -> Result<()> {
+        loop {
+            let msg: stderr::Msg = self.proxy.child_out.read_nix()?;
+            self.write.inner.write_nix(&msg)?;
+            eprintln!("read stderr msg {msg:?}");
+            self.write.inner.flush()?;
+
+            if msg == stderr::Msg::Last(()) {
+                break;
+            }
+        }
+        Ok(())
+    }
+
     /// Process a remote nix connection.
-    /// Reimplement Daemon::processConnection from nix/src/libstore/daemon.cc
-    pub fn process_connection(&mut self, proxy_to_nix: bool) -> Result<()>
+    pub fn process_connection(&mut self) -> Result<()>
     where
         W: Send,
     {
         let client_version = self.handshake()?;
 
-        if proxy_to_nix {
-            self.proxy.write_u64(WORKER_MAGIC_1)?;
-            self.proxy.flush()?;
-            let magic = self.proxy.read_u64()?;
-            if magic != WORKER_MAGIC_2 {
-                Err(anyhow!("unexpected WORKER_MAGIC_2: got {magic:x}"))?;
-            }
-            let protocol_version = self.proxy.read_u64()?;
-            if protocol_version < PROTOCOL_VERSION.into() {
-                Err(anyhow!(
-                    "unexpected protocol version: got {protocol_version}"
-                ))?;
-            }
-            self.proxy.write_u64(client_version)?;
-            self.proxy.write_u64(0)?; // cpu affinity, obsolete
-            self.proxy.write_u64(0)?; // reserve space, obsolete
-            self.proxy.flush()?;
-            let proxy_daemon_version = self.proxy.read_string()?;
-            eprintln!(
-                "Proxy daemon is: {}",
-                String::from_utf8_lossy(proxy_daemon_version.as_ref())
-            );
-            // FIXME: copy-paste
-            loop {
-                eprintln!("trying to read stderr::Msg");
-                let mut r = PrintingRead {
-                    buf: Vec::new(),
-                    inner: &mut self.proxy.child_out,
-                };
-                let msg: stderr::Msg = r.read_nix()?;
-                self.write.inner.write_nix(&msg)?;
-                eprintln!("read stderr msg {msg:?}");
-                self.write.inner.flush()?;
-
-                if msg == stderr::Msg::Last(()) {
-                    break;
-                }
-            }
-        } else {
-            self.write.write(&stderr::Msg::Last(()))?;
+        // Shake hands with the daemon that we're proxying.
+        self.proxy.child_in.write_nix(&WORKER_MAGIC_1)?;
+        self.proxy.child_in.flush()?;
+        let magic: u64 = self.proxy.child_out.read_nix()?;
+        if magic != WORKER_MAGIC_2 {
+            Err(anyhow!("unexpected WORKER_MAGIC_2: got {magic:x}"))?;
         }
+        let protocol_version: u64 = self.proxy.child_out.read_nix()?;
+        if protocol_version < PROTOCOL_VERSION.into() {
+            Err(anyhow!(
+                "unexpected protocol version: got {protocol_version}"
+            ))?;
+        }
+        self.proxy.child_in.write_nix(&client_version)?;
+        self.proxy.child_in.write_nix(&0u64)?; // cpu affinity, obsolete
+        self.proxy.child_in.write_nix(&0u64)?; // reserve space, obsolete
+        self.proxy.child_in.flush()?;
+        let proxy_daemon_version: NixString = self.proxy.child_out.read_nix()?;
+        eprintln!(
+            "Proxy daemon is: {}",
+            String::from_utf8_lossy(proxy_daemon_version.0.as_ref())
+        );
+        self.forward_stderr()?;
 
         loop {
-            let mut read = NixStoreRead {
-                inner: printing_read::PrintingRead {
-                    buf: Vec::new(),
-                    inner: &mut self.read.inner,
-                },
-            };
-
-            let op = match read.inner.read_nix::<WorkerOp>() {
+            let op = match self.read.inner.read_nix::<WorkerOp>() {
                 Err(serialize::Error::Io(e)) if e.kind() == std::io::ErrorKind::UnexpectedEof => {
                     eprintln!("EOF, closing");
                     break;
@@ -301,34 +297,13 @@ impl<R: Read, W: Write> NixReadWrite<R, W> {
                 x => x,
             }?;
 
-            // Check that the re-serialization of the op we just read is equivalent
-            // to the original bytes.
-            let mut buf = Vec::new();
-            buf.write_nix(&op).unwrap();
-            if buf != read.inner.buf {
-                eprintln!("mismatch!");
-                eprintln!("{buf:?}");
-                eprintln!("{:?}", read.inner.buf);
-                panic!();
-            }
-
             eprintln!("read op {op:?}");
             self.proxy.child_in.write_nix(&op).unwrap();
-            op.stream(&mut read.inner, &mut self.proxy.child_in)
+            op.stream(&mut self.read.inner, &mut self.proxy.child_in)
                 .unwrap();
             self.proxy.child_in.flush().unwrap();
 
-            // Read back stderr messages from the remote daemon.
-            loop {
-                let msg: stderr::Msg = self.proxy.child_out.read_nix()?;
-                self.write.inner.write_nix(&msg)?;
-                eprintln!("read stderr msg {msg:?}");
-                self.write.inner.flush()?;
-
-                if msg == stderr::Msg::Last(()) {
-                    break;
-                }
-            }
+            self.forward_stderr()?;
 
             // Read back the actual response.
             op.proxy_response(&mut self.proxy.child_out, &mut self.write.inner)?;

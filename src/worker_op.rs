@@ -1,9 +1,12 @@
+//! Worker ops from the Nix protocol.
+
 use serde::{Deserialize, Serialize};
 use std::io::Read;
 use std::io::Write;
 use std::ops::{Deref, DerefMut};
 use tagged_serde::TaggedSerde;
 
+use crate::framed_data;
 use crate::nar::Nar;
 use crate::{
     serialize::{NixDeserializer, NixSerializer},
@@ -59,26 +62,7 @@ pub trait Stream {
 
 impl<T> Stream for WithFramedSource<T> {
     fn stream(&self, read: &mut impl Read, write: &mut impl Write) -> anyhow::Result<()> {
-        let mut de = crate::serialize::NixDeserializer { read };
-        let mut ser = crate::serialize::NixSerializer { write };
-        const BUF_SIZE: usize = 4096;
-        let mut buf = vec![0; BUF_SIZE];
-
-        loop {
-            let mut len = u64::deserialize(&mut de)? as usize;
-            eprintln!("streaming {len} bytes");
-            (len as u64).serialize(&mut ser)?;
-            if len == 0 {
-                break;
-            }
-            while len > 0 {
-                let chunk_len = len.min(BUF_SIZE);
-                de.read.read_exact(&mut buf[..chunk_len])?;
-                ser.write.write_all(&buf[..chunk_len])?;
-                len -= chunk_len;
-            }
-        }
-        Ok(())
+        framed_data::stream(read, write)
     }
 }
 
@@ -88,7 +72,7 @@ impl<T> Stream for Plain<T> {
     }
 }
 
-/// The different worker ops.
+/// The worker ops of the nix protocol.
 ///
 /// On the wire, they are represented as the opcode followed by the body.
 ///
@@ -208,13 +192,7 @@ impl Stream for WorkerOp {
 
 impl WorkerOp {
     pub fn proxy_response(&self, mut read: impl Read, mut write: impl Write) -> Result<()> {
-        let mut logging_read = crate::printing_read::PrintingRead {
-            buf: Vec::new(),
-            inner: &mut read,
-        };
-        let mut deser = NixDeserializer {
-            read: &mut logging_read,
-        };
+        let mut deser = NixDeserializer { read: &mut read };
         let mut ser = NixSerializer { write: &mut write };
         let mut dbg_buf = Vec::new();
         let mut dbg_ser = NixSerializer {
@@ -234,12 +212,6 @@ impl WorkerOp {
                         eprintln!("read reply {reply:?}");
 
                         reply.serialize(&mut dbg_ser)?;
-                        if dbg_buf != logging_read.buf {
-                            eprintln!("mismatch!");
-                            eprintln!("{:?}", &logging_read.buf[0..500]);
-                            eprintln!("{:?}", &dbg_buf[0..500]);
-                            panic!();
-                        }
                         reply.serialize(&mut ser)?;
                     },)*
                 }
