@@ -74,9 +74,9 @@ impl<T> Stream for Plain<T> {
 
 /// The worker ops of the nix protocol.
 ///
-/// On the wire, they are represented as the opcode followed by the body.
-///
 /// The second argument in each variant is a tag denoting the expected return value.
+///
+/// On the wire, they are represented as the opcode followed by the body.
 #[derive(Debug, TaggedSerde)]
 pub enum WorkerOp {
     #[tagged_serde = 1]
