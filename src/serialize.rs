@@ -86,7 +86,7 @@ impl ser::Error for Error {
 
 pub type Result<T, E = Error> = std::result::Result<T, E>;
 
-pub(crate) trait NixReadExt {
+pub trait NixReadExt {
     fn read_nix<'de, 'a: 'de, D: serde::Deserialize<'de>>(&'a mut self) -> Result<D>;
 }
 
@@ -96,7 +96,7 @@ impl<R: Read> NixReadExt for R {
     }
 }
 
-pub(crate) trait NixWriteExt {
+pub trait NixWriteExt {
     fn write_nix(&mut self, val: &impl Serialize) -> Result<()>;
 }
 

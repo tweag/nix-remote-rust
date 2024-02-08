@@ -68,7 +68,6 @@ pub fn stream(read: &mut impl Read, write: &mut impl Write) -> anyhow::Result<()
 
     loop {
         let mut len = u64::deserialize(&mut de)? as usize;
-        eprintln!("streaming {len} bytes");
         (len as u64).serialize(&mut ser)?;
         if len == 0 {
             break;

@@ -12,10 +12,9 @@ mod serialize;
 pub mod stderr;
 pub mod worker_op;
 
-use crate::{
-    serialize::{NixReadExt, NixWriteExt},
-    worker_op::{Stream, WorkerOp},
-};
+pub use serialize::{NixReadExt, NixWriteExt};
+
+use crate::worker_op::{Stream, WorkerOp};
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
@@ -31,7 +30,7 @@ pub enum Error {
 
 pub type Result<T, E = Error> = std::result::Result<T, E>;
 
-#[derive(Deserialize, Serialize, Clone, PartialEq, Debug)]
+#[derive(Deserialize, Serialize, Clone, PartialEq, Debug, Eq, Hash)]
 #[serde(transparent)]
 pub struct StorePath(pub NixString);
 
@@ -47,7 +46,7 @@ pub struct DerivedPath(pub NixString);
 ///
 /// Strings in the nix protocol are not necessarily UTF-8, so this is
 /// different from the rust standard `String`.
-#[derive(Deserialize, Serialize, Clone, PartialEq, Eq, Default)]
+#[derive(Deserialize, Serialize, Clone, PartialEq, Eq, Default, Hash)]
 #[serde(transparent)]
 pub struct NixString(pub ByteBuf);
 
@@ -255,6 +254,16 @@ impl<R: Read, W: Write> NixProxy<R, W> {
             }
         }
         Ok(())
+    }
+
+    pub fn next_op(&mut self) -> Result<Option<WorkerOp>> {
+        match self.read.inner.read_nix::<WorkerOp>() {
+            Err(serialize::Error::Io(e)) if e.kind() == std::io::ErrorKind::UnexpectedEof => {
+                Ok(None)
+            }
+            Err(e) => Err(e.into()),
+            Ok(x) => Ok(Some(x)),
+        }
     }
 
     /// Process a remote nix connection.

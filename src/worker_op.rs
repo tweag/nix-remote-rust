@@ -23,7 +23,7 @@ pub struct Resp<T> {
 }
 
 impl<T> Resp<T> {
-    fn ty(&self, v: T) -> T {
+    pub fn ty(&self, v: T) -> T {
         v
     }
 }
@@ -456,9 +456,9 @@ pub struct AddBuildLog {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct BuildDerivation {
-    store_path: StorePath,
-    derivation: Derivation,
-    build_mode: BuildMode,
+    pub store_path: StorePath,
+    pub derivation: Derivation,
+    pub build_mode: BuildMode,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -473,9 +473,9 @@ pub struct Derivation {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct DerivationOutput {
-    store_path: StorePath,
-    method_or_hash: NixString,
-    hash_or_impure: NixString,
+    pub store_path: StorePath,
+    pub method_or_hash: NixString,
+    pub hash_or_impure: NixString,
 }
 
 #[cfg(test)]

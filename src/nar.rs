@@ -72,7 +72,9 @@ impl<'a> EntrySink<'a> for &'a mut Nar {
 
     fn become_directory(self) -> Self::DirectorySink {
         *self = Nar::Directory(Vec::new());
-        let Nar::Directory(dir) = self else { unreachable!() };
+        let Nar::Directory(dir) = self else {
+            unreachable!()
+        };
         dir
     }
 
