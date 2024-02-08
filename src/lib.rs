@@ -34,13 +34,31 @@ pub type Result<T, E = Error> = std::result::Result<T, E>;
 #[serde(transparent)]
 pub struct StorePath(pub NixString);
 
+impl AsRef<[u8]> for StorePath {
+    fn as_ref(&self) -> &[u8] {
+        self.0.as_ref()
+    }
+}
+
 #[derive(Deserialize, Serialize, Clone, PartialEq, Debug)]
 #[serde(transparent)]
 pub struct Path(pub NixString);
 
+impl AsRef<[u8]> for Path {
+    fn as_ref(&self) -> &[u8] {
+        self.0.as_ref()
+    }
+}
+
 #[derive(Deserialize, Serialize, Clone, PartialEq, Debug)]
 #[serde(transparent)]
 pub struct DerivedPath(pub NixString);
+
+impl AsRef<[u8]> for DerivedPath {
+    fn as_ref(&self) -> &[u8] {
+        self.0.as_ref()
+    }
+}
 
 /// A string from nix.
 ///
@@ -53,6 +71,12 @@ pub struct NixString(pub ByteBuf);
 impl std::fmt::Debug for NixString {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(&String::from_utf8_lossy(&self.0))
+    }
+}
+
+impl AsRef<[u8]> for NixString {
+    fn as_ref(&self) -> &[u8] {
+        self.0.as_ref()
     }
 }
 
