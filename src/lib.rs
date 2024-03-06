@@ -2,7 +2,12 @@ use anyhow::anyhow;
 use serde::{Deserialize, Serialize};
 use serde_bytes::ByteBuf;
 use serialize::NixSerializer;
-use std::io::{Read, Write};
+use std::{
+    ffi::OsStr,
+    io::{Read, Write},
+    os::unix::prelude::OsStrExt,
+    string::FromUtf8Error,
+};
 
 use worker_op::ValidPathInfo;
 
@@ -50,6 +55,12 @@ impl AsRef<[u8]> for Path {
     }
 }
 
+impl AsRef<OsStr> for Path {
+    fn as_ref(&self) -> &OsStr {
+        OsStr::from_bytes(self.as_ref())
+    }
+}
+
 #[derive(Deserialize, Serialize, Clone, PartialEq, Debug)]
 #[serde(transparent)]
 pub struct DerivedPath(pub NixString);
@@ -68,6 +79,12 @@ impl AsRef<[u8]> for DerivedPath {
 #[serde(transparent)]
 pub struct NixString(pub ByteBuf);
 
+impl NixString {
+    pub fn to_string(&self) -> Result<String, FromUtf8Error> {
+        String::from_utf8(self.0.as_slice().to_owned())
+    }
+}
+
 impl std::fmt::Debug for NixString {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(&String::from_utf8_lossy(&self.0))
@@ -77,6 +94,12 @@ impl std::fmt::Debug for NixString {
 impl AsRef<[u8]> for NixString {
     fn as_ref(&self) -> &[u8] {
         self.0.as_ref()
+    }
+}
+
+impl AsRef<OsStr> for NixString {
+    fn as_ref(&self) -> &OsStr {
+        OsStr::from_bytes(self.as_ref())
     }
 }
 
