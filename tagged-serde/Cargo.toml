@@ -2,6 +2,10 @@
 name = "tagged-serde"
 version = "0.1.0"
 edition = "2021"
+readme = "README.md"
+repository = "https://github.com/tweag/nix-remote-rust"
+license = "MIT"
+description = "A procedural macro for serde enums with integer tags"
 
 [dependencies]
 proc-macro2 = "1.0.56"
