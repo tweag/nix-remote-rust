@@ -40,7 +40,7 @@ pub struct NarDirectoryEntry {
     pub node: Nar,
 }
 
-trait EntrySink<'a>: 'a {
+pub trait EntrySink<'a>: 'a {
     type DirectorySink: DirectorySink<'a>;
     type FileSink: FileSink;
 
@@ -51,17 +51,17 @@ trait EntrySink<'a>: 'a {
 
 // The workaround for
 // https://github.com/rust-lang/rust/issues/87479
-trait DirectorySinkSuper {
+pub trait DirectorySinkSuper {
     type EntrySink<'b>: EntrySink<'b>;
 }
 
-trait DirectorySink<'a>: DirectorySinkSuper {
+pub trait DirectorySink<'a>: DirectorySinkSuper {
     fn create_entry<'b>(&'b mut self, name: NixString) -> Self::EntrySink<'b>
     where
         'a: 'b;
 }
 
-trait FileSink: std::io::Write {
+pub trait FileSink: std::io::Write {
     fn set_executable(&mut self, executable: bool);
     fn add_contents(&mut self, contents: &[u8]);
 }

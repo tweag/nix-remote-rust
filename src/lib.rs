@@ -83,6 +83,10 @@ impl NixString {
     pub fn to_string(&self) -> Result<String, FromUtf8Error> {
         String::from_utf8(self.0.as_slice().to_owned())
     }
+
+    pub fn from_bytes(bytes: &[u8]) -> Self {
+        NixString(ByteBuf::from(bytes.to_vec()))
+    }
 }
 
 impl std::fmt::Debug for NixString {
