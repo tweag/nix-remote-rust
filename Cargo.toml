@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2021"
 license = "MIT"
 description = "The nix remote protocol"
-repository = "https://github.com/tweag"
+repository = "https://github.com/tweag/nix-remote-rust"
 
 [dependencies]
 anyhow = { version = "1.0.66", features = ["backtrace"] }
