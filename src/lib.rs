@@ -13,7 +13,7 @@ use worker_op::ValidPathInfo;
 
 pub mod framed_data;
 pub mod nar;
-mod serialize;
+pub mod serialize;
 pub mod stderr;
 pub mod worker_op;
 
