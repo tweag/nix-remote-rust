@@ -45,7 +45,7 @@ impl AsRef<[u8]> for StorePath {
     }
 }
 
-#[derive(Deserialize, Serialize, Clone, PartialEq, Debug)]
+#[derive(Deserialize, Serialize, Clone, PartialEq, Debug, Eq)]
 #[serde(transparent)]
 pub struct Path(pub NixString);
 
@@ -61,7 +61,7 @@ impl AsRef<OsStr> for Path {
     }
 }
 
-#[derive(Deserialize, Serialize, Clone, PartialEq, Debug)]
+#[derive(Deserialize, Serialize, Clone, PartialEq, Debug, Eq)]
 #[serde(transparent)]
 pub struct DerivedPath(pub NixString);
 
@@ -75,7 +75,7 @@ impl AsRef<[u8]> for DerivedPath {
 ///
 /// Strings in the nix protocol are not necessarily UTF-8, so this is
 /// different from the rust standard `String`.
-#[derive(Deserialize, Serialize, Clone, PartialEq, Eq, Default, Hash)]
+#[derive(Deserialize, Serialize, Clone, PartialEq, Eq, Default, Hash, PartialOrd, Ord)]
 #[serde(transparent)]
 pub struct NixString(pub ByteBuf);
 
@@ -86,6 +86,18 @@ impl NixString {
 
     pub fn from_bytes(bytes: &[u8]) -> Self {
         NixString(ByteBuf::from(bytes.to_vec()))
+    }
+}
+
+impl From<String> for NixString {
+    fn from(s: String) -> NixString {
+        NixString(ByteBuf::from(s.into_bytes()))
+    }
+}
+
+impl From<Vec<u8>> for NixString {
+    fn from(s: Vec<u8>) -> NixString {
+        NixString(ByteBuf::from(s))
     }
 }
 
@@ -172,26 +184,26 @@ pub struct NixWrite<W> {
 }
 
 /// A set of paths.
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct PathSet {
     pub paths: Vec<Path>,
 }
 
 /// A set of store paths.
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct StorePathSet {
     // TODO: in nix, they call `parseStorePath` to separate store directory from path
     pub paths: Vec<StorePath>,
 }
 
 /// A set of strings.
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct StringSet {
     pub paths: Vec<NixString>,
 }
 
 /// A realisation.
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Realisation(pub NixString);
 
 /// A set of realisations.
@@ -238,6 +250,8 @@ impl NarHash {
     }
 }
 
+// TODO: This naming is a footgun. CppNix calls the inner one UnkeyedValidPathInfo
+// and the outer one ValidPathInfo.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ValidPathInfoWithPath {
     pub path: StorePath,

@@ -306,7 +306,7 @@ pub struct QueryMissingResponse {
     pub nar_size: u64,
 }
 
-#[derive(Debug, Clone, Copy, TaggedSerde)]
+#[derive(Debug, Clone, Copy, TaggedSerde, PartialEq, Eq)]
 pub enum BuildStatus {
     #[tagged_serde = 0]
     Built,
@@ -340,7 +340,7 @@ pub enum BuildStatus {
     NoSubstituters,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 pub struct BuildResult {
     pub status: BuildStatus,
     pub error_msg: NixString,
@@ -352,10 +352,10 @@ pub struct BuildResult {
 }
 
 // TODO: first NixString is a DrvOutput; second is a Realisation
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize, Default, PartialEq, Eq)]
 pub struct DrvOutputs(pub Vec<(NixString, Realisation)>);
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 pub struct CollectGarbage {
     pub action: GcAction,
     pub paths_to_delete: StorePathSet,
@@ -366,19 +366,19 @@ pub struct CollectGarbage {
     _obsolete2: u64,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 pub struct DerivationOutputMap {
     pub paths: Vec<(NixString, OptionalStorePath)>,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 pub struct CollectGarbageResponse {
     pub paths: PathSet,
     pub bytes_freed: u64,
     _obsolete: u64,
 }
 
-#[derive(Debug, Clone, TaggedSerde, Default)]
+#[derive(Debug, Copy, Clone, TaggedSerde, Default, PartialEq, Eq)]
 pub enum GcAction {
     #[tagged_serde = 0]
     ReturnLive,
@@ -391,7 +391,7 @@ pub enum GcAction {
     DeleteSpecific,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 pub struct AddToStoreNar {
     pub path: StorePath,
     pub deriver: OptionalStorePath,
