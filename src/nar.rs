@@ -32,6 +32,19 @@ impl Default for Nar {
     }
 }
 
+impl Nar {
+    /// Recursively sort all directories by name.
+    pub fn sort(&mut self) {
+        if let Nar::Directory(entries) = self {
+            entries.sort_by(|a, b| a.name.cmp(&b.name));
+
+            for e in entries {
+                e.node.sort();
+            }
+        }
+    }
+}
+
 // TODO: if tagged_serde supported tagging with arbitrary ser/de types,
 // we could use it here
 #[derive(Clone, Debug)]
