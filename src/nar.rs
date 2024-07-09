@@ -13,13 +13,15 @@ use crate::{
     NixString,
 };
 
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[cfg_attr(test, derive(arbitrary::Arbitrary))]
 pub struct NarFile {
     pub contents: NixString,
     pub executable: bool,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(test, derive(arbitrary::Arbitrary))]
 pub enum Nar {
     Contents(NarFile),
     Target(NixString),
@@ -47,7 +49,8 @@ impl Nar {
 
 // TODO: if tagged_serde supported tagging with arbitrary ser/de types,
 // we could use it here
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(test, derive(arbitrary::Arbitrary))]
 pub struct NarDirectoryEntry {
     pub name: NixString,
     pub node: Nar,
