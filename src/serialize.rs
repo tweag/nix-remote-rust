@@ -97,17 +97,18 @@ impl<R: Read> NixReadExt for R {
 }
 
 pub trait NixWriteExt {
-    fn write_nix(&mut self, val: &impl Serialize) -> Result<()>;
+    fn write_nix<T: Serialize + ?Sized>(&mut self, val: &T) -> Result<()>;
 }
 
 impl<W: Write> NixWriteExt for W {
-    fn write_nix(&mut self, val: &impl Serialize) -> Result<()> {
+    fn write_nix<T: Serialize + ?Sized>(&mut self, val: &T) -> Result<()> {
         val.serialize(&mut NixSerializer { write: self })?;
         Ok(())
     }
 }
 
 /// A deserializer for the nix remote protocol.
+// TODO: should decouple the lifetime of the &mut ref from the lifetime of the Read
 pub struct NixDeserializer<'de> {
     pub read: &'de mut dyn Read,
 }

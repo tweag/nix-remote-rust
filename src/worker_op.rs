@@ -16,7 +16,8 @@ use crate::{DerivedPath, Path, PathSet, Realisation, RealisationSet};
 
 /// A zero-sized marker type. Its job is to mark the expected response
 /// type for each worker op.
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[cfg_attr(test, derive(arbitrary::Arbitrary))]
 pub struct Resp<T> {
     #[serde(skip)]
     marker: std::marker::PhantomData<T>,
@@ -29,6 +30,7 @@ impl<T> Resp<T> {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[cfg_attr(test, derive(arbitrary::Arbitrary))]
 pub struct Plain<T>(pub T);
 
 impl<T> Deref for Plain<T> {
@@ -40,6 +42,7 @@ impl<T> Deref for Plain<T> {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[cfg_attr(test, derive(arbitrary::Arbitrary))]
 pub struct WithFramedSource<T>(pub T);
 
 impl<T> Deref for WithFramedSource<T> {
@@ -77,7 +80,8 @@ impl<T> Stream for Plain<T> {
 /// The second argument in each variant is a tag denoting the expected return value.
 ///
 /// On the wire, they are represented as the opcode followed by the body.
-#[derive(Debug, TaggedSerde)]
+#[cfg_attr(test, derive(arbitrary::Arbitrary))]
+#[derive(Debug, TaggedSerde, PartialEq, Eq)]
 pub enum WorkerOp {
     #[tagged_serde = 1]
     IsValidPath(Plain<StorePath>, Resp<bool>),
@@ -226,6 +230,7 @@ impl WorkerOp {
 type Time = u64;
 type OptionalStorePath = StorePath;
 
+#[cfg_attr(test, derive(arbitrary::Arbitrary))]
 #[derive(Debug, Clone, Copy, TaggedSerde, PartialEq, Eq)]
 pub enum Verbosity {
     #[tagged_serde = 0]
@@ -246,6 +251,7 @@ pub enum Verbosity {
     Vomit,
 }
 
+#[cfg_attr(test, derive(arbitrary::Arbitrary))]
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 pub struct SetOptions {
     pub keep_failing: bool,
@@ -263,7 +269,8 @@ pub struct SetOptions {
     pub options: Vec<(NixString, NixString)>,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[cfg_attr(test, derive(arbitrary::Arbitrary))]
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 pub struct AddToStore {
     pub name: StorePath,
     pub cam_str: StorePath,
@@ -271,7 +278,8 @@ pub struct AddToStore {
     pub repair: bool,
 }
 
-#[derive(Debug, Clone, Copy, TaggedSerde)]
+#[cfg_attr(test, derive(arbitrary::Arbitrary))]
+#[derive(Debug, Clone, Copy, TaggedSerde, PartialEq, Eq)]
 pub enum BuildMode {
     #[tagged_serde = 0]
     Normal,
@@ -281,23 +289,27 @@ pub enum BuildMode {
     Check,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[cfg_attr(test, derive(arbitrary::Arbitrary))]
 pub struct BuildPaths {
     pub paths: Vec<StorePath>,
     pub build_mode: BuildMode,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[cfg_attr(test, derive(arbitrary::Arbitrary))]
 pub struct QueryMissing {
     pub paths: Vec<StorePath>,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[cfg_attr(test, derive(arbitrary::Arbitrary))]
 pub struct QueryPathInfoResponse {
     pub path: Option<ValidPathInfo>,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[cfg_attr(test, derive(arbitrary::Arbitrary))]
 pub struct QueryMissingResponse {
     pub will_build: StorePathSet,
     pub will_substitute: StorePathSet,
@@ -307,6 +319,7 @@ pub struct QueryMissingResponse {
 }
 
 #[derive(Debug, Clone, Copy, TaggedSerde, PartialEq, Eq)]
+#[cfg_attr(test, derive(arbitrary::Arbitrary))]
 pub enum BuildStatus {
     #[tagged_serde = 0]
     Built,
@@ -341,6 +354,7 @@ pub enum BuildStatus {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[cfg_attr(test, derive(arbitrary::Arbitrary))]
 pub struct BuildResult {
     pub status: BuildStatus,
     pub error_msg: NixString,
@@ -353,9 +367,11 @@ pub struct BuildResult {
 
 // TODO: first NixString is a DrvOutput; second is a Realisation
 #[derive(Debug, Clone, Deserialize, Serialize, Default, PartialEq, Eq)]
+#[cfg_attr(test, derive(arbitrary::Arbitrary))]
 pub struct DrvOutputs(pub Vec<(NixString, Realisation)>);
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[cfg_attr(test, derive(arbitrary::Arbitrary))]
 pub struct CollectGarbage {
     pub action: GcAction,
     pub paths_to_delete: StorePathSet,
@@ -367,11 +383,13 @@ pub struct CollectGarbage {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[cfg_attr(test, derive(arbitrary::Arbitrary))]
 pub struct DerivationOutputMap {
     pub paths: Vec<(NixString, OptionalStorePath)>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[cfg_attr(test, derive(arbitrary::Arbitrary))]
 pub struct CollectGarbageResponse {
     pub paths: PathSet,
     pub bytes_freed: u64,
@@ -379,6 +397,7 @@ pub struct CollectGarbageResponse {
 }
 
 #[derive(Debug, Copy, Clone, TaggedSerde, Default, PartialEq, Eq)]
+#[cfg_attr(test, derive(arbitrary::Arbitrary))]
 pub enum GcAction {
     #[tagged_serde = 0]
     ReturnLive,
@@ -392,6 +411,7 @@ pub enum GcAction {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[cfg_attr(test, derive(arbitrary::Arbitrary))]
 pub struct AddToStoreNar {
     pub path: StorePath,
     pub deriver: OptionalStorePath,
@@ -406,24 +426,28 @@ pub struct AddToStoreNar {
     pub dont_check_sigs: bool,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[cfg_attr(test, derive(arbitrary::Arbitrary))]
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 pub struct FindRootsResponse {
     pub roots: Vec<(Path, StorePath)>,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[cfg_attr(test, derive(arbitrary::Arbitrary))]
 pub struct QueryValidPaths {
     pub paths: StorePathSet,
     pub builders_use_substitutes: bool,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[cfg_attr(test, derive(arbitrary::Arbitrary))]
 pub struct AddMultipleToStore {
     pub repair: bool,
     pub dont_check_sigs: bool,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[cfg_attr(test, derive(arbitrary::Arbitrary))]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ValidPathInfo {
     pub deriver: OptionalStorePath,
     pub hash: NarHash,
@@ -437,31 +461,36 @@ pub struct ValidPathInfo {
 
 type RenderedContentAddress = NixString;
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[cfg_attr(test, derive(arbitrary::Arbitrary))]
 pub struct VerifyStore {
     pub check_contents: bool,
     pub repair: bool,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[cfg_attr(test, derive(arbitrary::Arbitrary))]
 pub struct AddSignatures {
     pub path: StorePath,
     pub signatures: StringSet,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[cfg_attr(test, derive(arbitrary::Arbitrary))]
 pub struct AddBuildLog {
     pub path: StorePath,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[cfg_attr(test, derive(arbitrary::Arbitrary))]
 pub struct BuildDerivation {
     pub store_path: StorePath,
     pub derivation: Derivation,
     pub build_mode: BuildMode,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[cfg_attr(test, derive(arbitrary::Arbitrary))]
 pub struct Derivation {
     pub outputs: Vec<(NixString, DerivationOutput)>,
     pub input_sources: StorePathSet,
@@ -471,7 +500,8 @@ pub struct Derivation {
     pub env: Vec<(NixString, NixString)>,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[cfg_attr(test, derive(arbitrary::Arbitrary))]
 pub struct DerivationOutput {
     pub store_path: StorePath,
     pub method_or_hash: NixString,
@@ -480,6 +510,7 @@ pub struct DerivationOutput {
 
 #[cfg(test)]
 mod tests {
+    use arbtest::arbtest;
     use serde_bytes::ByteBuf;
 
     use crate::{serialize::NixSerializer, worker_op::SetOptions};
@@ -513,5 +544,18 @@ mod tests {
         cursor.set_position(0);
         let mut deserializer = NixDeserializer { read: &mut cursor };
         assert_eq!(options, SetOptions::deserialize(&mut deserializer).unwrap());
+    }
+
+    #[test]
+    fn test_roundtrip() {
+        arbtest(|u| {
+            let op: WorkerOp = u.arbitrary()?;
+            let bytes = crate::to_vec(&op).unwrap();
+            let new_op: WorkerOp = crate::from_bytes(&bytes).unwrap();
+
+            assert_eq!(op, new_op);
+
+            Ok(())
+        });
     }
 }

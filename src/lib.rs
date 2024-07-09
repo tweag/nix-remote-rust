@@ -21,6 +21,31 @@ pub use serialize::{NixReadExt, NixWriteExt};
 
 use crate::worker_op::{Stream, WorkerOp};
 
+pub fn to_writer<W: std::io::Write, T: ?Sized + Serialize>(
+    mut writer: W,
+    value: &T,
+) -> serialize::Result<()> {
+    writer.write_nix(value)
+}
+
+pub fn to_vec<T: ?Sized + Serialize>(value: &T) -> serialize::Result<Vec<u8>> {
+    let mut ret = Vec::new();
+    ret.write_nix(value)?;
+    Ok(ret)
+}
+
+pub fn from_reader<R: std::io::Read, T: serde::de::DeserializeOwned>(
+    mut reader: R,
+) -> serialize::Result<T> {
+    reader.read_nix()
+}
+
+// TODO: getting a proper zero-copy version of this requires sorting out the lifetimes in serializer.
+// Not a big priority, since none of the Nix protocol types support borrowed buffers yet
+pub fn from_bytes<T: serde::de::DeserializeOwned>(mut bytes: &[u8]) -> serialize::Result<T> {
+    bytes.read_nix()
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
     #[error("I/O error: {0}")]
@@ -36,6 +61,7 @@ pub enum Error {
 pub type Result<T, E = Error> = std::result::Result<T, E>;
 
 #[derive(Deserialize, Serialize, Clone, PartialEq, Debug, Eq, Hash)]
+#[cfg_attr(test, derive(arbitrary::Arbitrary))]
 #[serde(transparent)]
 pub struct StorePath(pub NixString);
 
@@ -46,6 +72,7 @@ impl AsRef<[u8]> for StorePath {
 }
 
 #[derive(Deserialize, Serialize, Clone, PartialEq, Debug, Eq)]
+#[cfg_attr(test, derive(arbitrary::Arbitrary))]
 #[serde(transparent)]
 pub struct Path(pub NixString);
 
@@ -62,6 +89,7 @@ impl AsRef<OsStr> for Path {
 }
 
 #[derive(Deserialize, Serialize, Clone, PartialEq, Debug, Eq)]
+#[cfg_attr(test, derive(arbitrary::Arbitrary))]
 #[serde(transparent)]
 pub struct DerivedPath(pub NixString);
 
@@ -185,12 +213,14 @@ pub struct NixWrite<W> {
 
 /// A set of paths.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[cfg_attr(test, derive(arbitrary::Arbitrary))]
 pub struct PathSet {
     pub paths: Vec<Path>,
 }
 
 /// A set of store paths.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[cfg_attr(test, derive(arbitrary::Arbitrary))]
 pub struct StorePathSet {
     // TODO: in nix, they call `parseStorePath` to separate store directory from path
     pub paths: Vec<StorePath>,
@@ -198,22 +228,25 @@ pub struct StorePathSet {
 
 /// A set of strings.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[cfg_attr(test, derive(arbitrary::Arbitrary))]
 pub struct StringSet {
     pub paths: Vec<NixString>,
 }
 
 /// A realisation.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[cfg_attr(test, derive(arbitrary::Arbitrary))]
 pub struct Realisation(pub NixString);
 
 /// A set of realisations.
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[cfg_attr(test, derive(arbitrary::Arbitrary))]
 pub struct RealisationSet {
     pub realisations: Vec<Realisation>,
 }
 
 /// A nar hash.
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct NarHash {
     /// This data has not been validated; this is just copied from the wire.
     pub data: ByteBuf,
@@ -252,7 +285,8 @@ impl NarHash {
 
 // TODO: This naming is a footgun. CppNix calls the inner one UnkeyedValidPathInfo
 // and the outer one ValidPathInfo.
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[cfg_attr(test, derive(arbitrary::Arbitrary))]
 pub struct ValidPathInfoWithPath {
     pub path: StorePath,
     pub info: ValidPathInfo,
@@ -435,5 +469,23 @@ impl From<u64> for DaemonVersion {
 impl From<DaemonVersion> for u64 {
     fn from(DaemonVersion { major, minor }: DaemonVersion) -> Self {
         ((major as u64) << 8) | minor as u64
+    }
+}
+
+#[cfg(test)]
+impl<'a> arbitrary::Arbitrary<'a> for NixString {
+    fn arbitrary(u: &mut arbitrary::Unstructured<'a>) -> arbitrary::Result<Self> {
+        let data: Vec<u8> = Vec::arbitrary(u)?;
+        Ok(NixString(ByteBuf::from(data)))
+    }
+}
+
+#[cfg(test)]
+impl<'a> arbitrary::Arbitrary<'a> for NarHash {
+    fn arbitrary(u: &mut arbitrary::Unstructured<'a>) -> arbitrary::Result<Self> {
+        let data: Vec<u8> = Vec::arbitrary(u)?;
+        Ok(NarHash {
+            data: ByteBuf::from(data),
+        })
     }
 }
