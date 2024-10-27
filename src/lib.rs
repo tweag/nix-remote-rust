@@ -6,6 +6,8 @@ use std::{
     ffi::OsStr,
     io::{Read, Write},
     os::unix::prelude::OsStrExt,
+    os::unix::process::ExitStatusExt,
+    process::Command,
     string::FromUtf8Error,
 };
 
@@ -181,6 +183,100 @@ impl Default for DaemonHandle {
     }
 }
 
+pub struct Activity {
+    id: u64,
+    drv_path: String,
+}
+
+impl Activity {
+    pub fn new(id: u64, drv_path: String) -> Self {
+        Self {
+            id,
+            drv_path,
+        }
+    }
+
+    pub fn write_log<W: Write>(&self, write: &mut NixWrite<W>, msg: String) -> Result<()> {
+        write.inner.write_nix(&stderr::Msg::Result(stderr::StderrResult {
+            act: self.id,
+            typ: 101,
+            fields: stderr::LoggerFields {
+                fields: Vec::from([stderr::LoggerField::String(msg)]),
+            },
+        }))?;
+        write.inner.flush()?;
+        Ok(())
+    }
+
+    pub fn do_copy<W: Write>(&mut self, write: &mut NixWrite<W>, target_store: &str) -> Result<()> {
+        // get derivation outputs
+
+        let Ok(res) = Command::new("nix-store")
+            .args(["--query", "--size", "--use-output", &self.drv_path])
+            .output() else {
+                self.write_log(write, format!("failed to check existence of outputs of {}", self.drv_path).into())?;
+                return anyhow::Result::Err(anyhow::anyhow!("nix-store --query failed").into())
+            };
+        let stderr = String::from_utf8(res.stderr).map_err(anyhow::Error::msg)?;
+        if res.status.code() == Some(1) && stderr.starts_with("error: path '") && stderr.ends_with("' is not valid\n") {
+            return Ok(())
+        };
+        for line in skip_last(stderr.split("\n")) {
+            self.write_log(write, format!("nix-store --query --size --use-output: {}", line).into())?;
+        };
+        if !res.status.success() {
+            let reason = if let Some(code) = res.status.code() {
+                if code == 1 {
+                    self.write_log(write, format!("failed to get outputs for {}, maybe build failed", self.drv_path))?;
+                    return Ok(())
+                }
+                format!("with status code {code}")
+            } else if let Some(signal) = res.status.signal() {
+                format!("because of signal {signal}")
+            } else {
+                "unexpectedly".to_string()
+            };
+            self.write_log(write, format!("command 'nix-store --query --size --use-output {}' exited {reason}", self.drv_path))?;
+            return Ok(())
+        };
+
+        // copy all outputs
+        self.write_log(write, format!("copying all outputs from {}", self.drv_path))?;
+        let arg = self.drv_path.clone() + "^*";
+        let args = ["--option", "extra-experimental-features", "nix-command", "copy", "--to", target_store, &arg];
+        let Ok(res) = Command::new("nix")
+            .args(args)
+            .output() else {
+                self.write_log(write, format!("failed to copy outputs of {}", self.drv_path).into())?;
+                return anyhow::Result::Err(anyhow::anyhow!("nix copy failed").into())
+            };
+        let stderr = String::from_utf8(res.stderr).map_err(anyhow::Error::msg)?;
+        for line in skip_last(stderr.split("\n")) {
+            self.write_log(write, format!("nix copy: {}", line).into())?;
+        };
+        if !res.status.success() {
+            let reason = if let Some(code) = res.status.code() {
+                format!("with status code {code}")
+            } else if let Some(signal) = res.status.signal() {
+                format!("because of signal {signal}")
+            } else {
+                "unexpectedly".to_string()
+            };
+            self.write_log(write, format!("command 'nix {}' exited {reason}", args.join(" ")))?;
+            return Ok(())
+        };
+        Ok(())
+    }
+}
+
+// Copied from https://users.rust-lang.org/t/iterator-skip-last/45635/5
+fn skip_last<T>(mut iter: impl Iterator<Item=T>) -> impl Iterator<Item=T> {
+    let last = iter.next();
+    iter.scan(last, |state, item| {
+        std::mem::replace(state, Some(item))
+    })
+}
+
 /// A proxy to the nix daemon.
 ///
 /// This doesn't currently *do* very much, it just inspects the protocol as it goes past.
@@ -189,14 +285,16 @@ pub struct NixProxy<R, W> {
     pub read: NixRead<R>,
     pub write: NixWrite<W>,
     proxy: DaemonHandle,
+    target_store: String,
 }
 
 impl<R: Read, W: Write> NixProxy<R, W> {
-    pub fn new(r: R, w: W) -> Self {
+    pub fn new(r: R, w: W, target_store: &str) -> Self {
         Self {
             read: NixRead { inner: r },
             write: NixWrite { inner: w },
             proxy: DaemonHandle::new(),
+            target_store: target_store.to_string(),
         }
     }
 }
@@ -373,10 +471,32 @@ impl<R: Read, W: Write> NixProxy<R, W> {
     }
 
     fn forward_stderr(&mut self) -> Result<()> {
+        let mut activities = std::collections::HashMap::new();
         loop {
             let msg: stderr::Msg = self.proxy.child_out.read_nix()?;
+
+            match msg {
+                stderr::Msg::StartActivity(ref act) if act.typ == 105 /*actBuild*/ => {
+                    //eprintln!("read StartActivity {act:?}");
+                    let Some(stderr::LoggerField::String(drv_path)) = act.fields.fields.get(0) else {
+                        return anyhow::Result::Err(anyhow::anyhow!("invalid or missing field #0, expected derivation path").into())
+                    };
+                    //let drv_path = String::from_utf8(drv_path.to_vec()).map_err(anyhow::Error::msg)?;
+                    //eprintln!("got drv: {}", drv_path);
+                    activities.insert(act.act, Activity::new(act.act, drv_path.clone()));
+                }
+                stderr::Msg::StopActivity(act_id) => {
+                    if let Some(mut act) = activities.remove(&act_id) {
+                        //eprintln!("got drv: {}", act.drv_path);
+                        // nix path-info ${drv_path}^* | nix copy --stdin --to ...
+                        act.do_copy(&mut self.write, &self.target_store)?;
+                    }
+                }
+                _ => {}
+            };
+
             self.write.inner.write_nix(&msg)?;
-            eprintln!("read stderr msg {msg:?}");
+            //eprintln!("read stderr msg {msg:?}");
             self.write.inner.flush()?;
 
             if msg == stderr::Msg::Last(()) {
@@ -420,11 +540,11 @@ impl<R: Read, W: Write> NixProxy<R, W> {
         self.proxy.child_in.write_nix(&0u64)?; // cpu affinity, obsolete
         self.proxy.child_in.write_nix(&0u64)?; // reserve space, obsolete
         self.proxy.child_in.flush()?;
-        let proxy_daemon_version: NixString = self.proxy.child_out.read_nix()?;
-        eprintln!(
-            "Proxy daemon is: {}",
-            String::from_utf8_lossy(proxy_daemon_version.0.as_ref())
-        );
+        let _proxy_daemon_version: NixString = self.proxy.child_out.read_nix()?;
+        //eprintln!(
+        //    "Proxy daemon is: {}",
+        //    String::from_utf8_lossy(proxy_daemon_version.0.as_ref())
+        //);
         self.forward_stderr()?;
 
         loop {
@@ -436,7 +556,7 @@ impl<R: Read, W: Write> NixProxy<R, W> {
                 x => x,
             }?;
 
-            eprintln!("read op {op:?}");
+            //eprintln!("read op {op:?}");
             self.proxy.child_in.write_nix(&op).unwrap();
             op.stream(&mut self.read.inner, &mut self.proxy.child_in)
                 .unwrap();

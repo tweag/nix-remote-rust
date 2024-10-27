@@ -178,7 +178,7 @@ macro_rules! for_each_op {
 
 impl Stream for WorkerOp {
     fn stream(&self, read: &mut impl Read, write: &mut impl Write) -> anyhow::Result<()> {
-        eprintln!("streaming worker op");
+        //eprintln!("streaming worker op");
         macro_rules! stream {
             ($($name:ident),*) => {
                 match self {
@@ -213,7 +213,7 @@ impl WorkerOp {
                     }
                     $(WorkerOp::$name(_inner, resp) => {
                         let reply = resp.ty(<_>::deserialize(&mut deser)?);
-                        eprintln!("read reply {reply:?}");
+                        //eprintln!("read reply {reply:?}");
 
                         reply.serialize(&mut dbg_ser)?;
                         reply.serialize(&mut ser)?;
