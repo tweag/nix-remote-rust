@@ -292,11 +292,13 @@ impl<'de, 'a> de::Deserializer<'de> for &'a mut NixDeserializer<'de> {
         Err(Error::WontImplement("str"))
     }
 
-    fn deserialize_string<V>(self, _visitor: V) -> Result<V::Value, Self::Error>
+    fn deserialize_string<V>(self, visitor: V) -> Result<V::Value, Self::Error>
     where
         V: de::Visitor<'de>,
     {
-        Err(Error::WontImplement("String"))
+        let b = self.read_byte_buf()?;
+        let s = String::from_utf8(b).map_err(|e| Error::Custom(e.to_string()))?;
+        visitor.visit_string(s)
     }
 
     fn deserialize_bytes<V>(self, visitor: V) -> Result<V::Value, Self::Error>
@@ -630,8 +632,8 @@ impl<'se> serde::Serializer for &mut NixSerializer<'se> {
         Err(Error::WontImplement("char"))
     }
 
-    fn serialize_str(self, _v: &str) -> Result<Self::Ok, Self::Error> {
-        Err(Error::WontImplement("String"))
+    fn serialize_str(self, v: &str) -> Result<Self::Ok, Self::Error> {
+        self.write_byte_buf(v.as_bytes())
     }
 
     fn serialize_bytes(self, v: &[u8]) -> Result<Self::Ok, Self::Error> {

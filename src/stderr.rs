@@ -39,10 +39,10 @@ pub enum Msg {
 
 #[derive(Debug, Deserialize, Serialize, Clone, PartialEq, Eq)]
 pub struct StderrError {
-    typ: ByteBuf,
+    typ: String,
     level: u64,
-    name: ByteBuf,
-    message: ByteBuf,
+    name: String,
+    message: String,
     have_pos: u64,
     traces: Vec<Trace>,
 }
@@ -52,7 +52,7 @@ pub struct StderrStartActivity {
     act: u64,
     lvl: u64,
     typ: u64,
-    s: ByteBuf,
+    s: String,
     fields: LoggerFields,
     parent: u64,
 }
@@ -80,5 +80,5 @@ enum LoggerField {
     #[tagged_serde = 0]
     Int(u64),
     #[tagged_serde = 1]
-    String(ByteBuf),
+    String(String),
 }
