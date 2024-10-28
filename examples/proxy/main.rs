@@ -1,4 +1,5 @@
-use nix_remote::NixProxy;
+mod proxy;
+use proxy::NixProxy;
 
 fn main() {
     let mut proxy = NixProxy::new(std::io::stdin(), std::io::stdout());
