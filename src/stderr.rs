@@ -39,44 +39,44 @@ pub enum Msg {
 
 #[derive(Debug, Deserialize, Serialize, Clone, PartialEq, Eq)]
 pub struct StderrError {
-    typ: ByteBuf,
-    level: u64,
-    name: ByteBuf,
-    message: ByteBuf,
-    have_pos: u64,
-    traces: Vec<Trace>,
+    pub typ: ByteBuf,
+    pub level: u64,
+    pub name: ByteBuf,
+    pub message: ByteBuf,
+    pub have_pos: u64,
+    pub traces: Vec<Trace>,
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone, PartialEq, Eq)]
 pub struct StderrStartActivity {
-    act: u64,
-    lvl: u64,
-    typ: u64,
-    s: ByteBuf,
-    fields: LoggerFields,
-    parent: u64,
+    pub act: u64,
+    pub lvl: u64,
+    pub typ: u64,
+    pub s: ByteBuf,
+    pub fields: LoggerFields,
+    pub parent: u64,
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone, PartialEq, Eq)]
 pub struct StderrResult {
-    act: u64,
-    typ: u64,
-    fields: LoggerFields,
+    pub act: u64,
+    pub typ: u64,
+    pub fields: LoggerFields,
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone, PartialEq, Eq)]
-struct Trace {
-    have_pos: u64,
-    trace: ByteBuf,
+pub struct Trace {
+    pub have_pos: u64,
+    pub trace: ByteBuf,
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone, PartialEq, Eq)]
-struct LoggerFields {
-    fields: Vec<LoggerField>,
+pub struct LoggerFields {
+    pub fields: Vec<LoggerField>,
 }
 
 #[derive(Debug, TaggedSerde, Clone, PartialEq, Eq)]
-enum LoggerField {
+pub enum LoggerField {
     #[tagged_serde = 0]
     Int(u64),
     #[tagged_serde = 1]
