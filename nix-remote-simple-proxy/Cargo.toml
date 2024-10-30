@@ -4,4 +4,4 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-nix-remote = { path = "../nix-remote" }
+nix-remote.workspace = true
