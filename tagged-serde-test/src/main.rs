@@ -1,4 +1,4 @@
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use tagged_serde::TaggedSerde;
 
 // #[derive(TaggedSerde, Clone, Serialize)]

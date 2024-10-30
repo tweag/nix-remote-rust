@@ -34,6 +34,7 @@
             cargo-generate
             cargo-outdated
             cargo-release
+            cargo-udeps
             rust-toolchain
           ];
         };
