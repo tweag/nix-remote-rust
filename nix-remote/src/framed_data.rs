@@ -58,26 +58,3 @@ impl FramedData {
         Ok(())
     }
 }
-
-/// Stream framed data from a `std::io::Read` to a `std::io::Write`.
-pub fn stream(read: &mut impl Read, write: &mut impl Write) -> anyhow::Result<()> {
-    let mut de = crate::serialize::NixDeserializer { read };
-    let mut ser = crate::serialize::NixSerializer { write };
-    const BUF_SIZE: usize = 4096;
-    let mut buf = vec![0; BUF_SIZE];
-
-    loop {
-        let mut len = u64::deserialize(&mut de)? as usize;
-        (len as u64).serialize(&mut ser)?;
-        if len == 0 {
-            break;
-        }
-        while len > 0 {
-            let chunk_len = len.min(BUF_SIZE);
-            de.read.read_exact(&mut buf[..chunk_len])?;
-            ser.write.write_all(&buf[..chunk_len])?;
-            len -= chunk_len;
-        }
-    }
-    Ok(())
-}

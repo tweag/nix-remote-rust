@@ -3,3 +3,4 @@ target
 .helix
 test-remote-store
 result
+.direnv

@@ -1,0 +1,18 @@
+[package]
+name = "nix-remote"
+version = "0.1.1"
+edition = "2021"
+license = "MIT"
+repository = "https://github.com/tweag/nix-remote-rust"
+
+[dependencies]
+anyhow.workspace = true
+serde.workspace = true
+serde_bytes.workspace = true
+tagged-serde.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+arbitrary.workspace = true
+arbtest.workspace = true
+expect-test.workspace = true
