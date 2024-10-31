@@ -209,6 +209,27 @@ impl<R: Read, W: Write> Client<R, W> {
             write,
         }
     }
+
+    pub fn handshake(&mut self, client_version: DaemonVersion) -> Result<NixString> {
+        self.write.write_nix(&WORKER_MAGIC_1)?;
+        self.write.flush()?;
+        let magic: u64 = self.read.read_nix()?;
+        if magic != WORKER_MAGIC_2 {
+            Err(anyhow!("unexpected WORKER_MAGIC_2: got {magic:x}"))?;
+        }
+        let protocol_version: u64 = self.read.read_nix()?;
+        if protocol_version < PROTOCOL_VERSION.into() {
+            Err(anyhow!(
+                "unexpected protocol version: got {protocol_version}"
+            ))?;
+        }
+        self.write.write_nix(&u64::from(client_version))?;
+        self.write.write_nix(&0u64)?; // cpu affinity, obsolete
+        self.write.write_nix(&0u64)?; // reserve space, obsolete
+        self.write.flush()?;
+        let daemon_version: NixString = self.read.read_nix()?;
+        Ok(daemon_version)
+    }
 }
 
 impl<R: Read, W: Write> Server<R, W> {
@@ -217,6 +238,33 @@ impl<R: Read, W: Write> Server<R, W> {
             read: NixRead { inner: r },
             write: NixWrite { inner: w },
         }
+    }
+
+    // Wait for an initialization message from the client, and perform
+    // the version negotiation.
+    //
+    // Returns the client version.
+    pub fn handshake(&mut self, server_version: &str) -> Result<DaemonVersion> {
+        let magic = self.read.read_u64()?;
+        if magic != WORKER_MAGIC_1 {
+            Err(anyhow!(""))?;
+        }
+
+        self.write.write_u64(WORKER_MAGIC_2)?;
+        self.write.write_u64(PROTOCOL_VERSION.into())?;
+        self.write.flush()?;
+
+        let client_version = self.read.read_u64()?;
+
+        if client_version < PROTOCOL_VERSION.into() {
+            Err(anyhow!("Client version {client_version} is too old"))?;
+        }
+
+        let _obsolete_cpu_affinity = self.read.read_u64()?;
+        let _obsolete_reserve_space = self.read.read_u64()?;
+        self.write.write_string(server_version.as_bytes())?;
+        self.write.flush()?;
+        Ok(PROTOCOL_VERSION)
     }
 }
 
@@ -377,38 +425,6 @@ impl<W: Write> NixWrite<W> {
 }
 
 impl<R: Read, W: Write> NixProxy<R, W> {
-    // Wait for an initialization message from the client, and perform
-    // the version negotiation.
-    //
-    // Returns the client version.
-    pub fn handshake(&mut self) -> Result<u64> {
-        let magic = self.client.read.read_u64()?;
-        if magic != WORKER_MAGIC_1 {
-            eprintln!("{magic:x}");
-            eprintln!("{WORKER_MAGIC_1:x}");
-            todo!("handle error: protocol mismatch 1");
-        }
-
-        self.client.write.write_u64(WORKER_MAGIC_2)?;
-        self.client.write.write_u64(PROTOCOL_VERSION.into())?;
-        self.client.write.flush()?;
-
-        let client_version = self.client.read.read_u64()?;
-
-        if client_version < PROTOCOL_VERSION.into() {
-            Err(anyhow!("Client version {client_version} is too old"))?;
-        }
-
-        // TODO keep track of number of WorkerOps performed
-        let mut _op_count: u64 = 0;
-
-        let _obsolete_cpu_affinity = self.client.read.read_u64()?;
-        let _obsolete_reserve_space = self.client.read.read_u64()?;
-        self.client.write.write_string("rust-nix-bazel-0.1.0".as_bytes())?;
-        self.client.write.flush()?;
-        Ok(PROTOCOL_VERSION.into())
-    }
-
     fn forward_stderr(&mut self) -> Result<()> {
         loop {
             let msg: stderr::Msg = self.proxy.read.read_nix()?;
@@ -438,26 +454,8 @@ impl<R: Read, W: Write> NixProxy<R, W> {
     where
         W: Send,
     {
-        let client_version = self.handshake()?;
-
-        // Shake hands with the daemon that we're proxying.
-        self.proxy.write.write_nix(&WORKER_MAGIC_1)?;
-        self.proxy.write.flush()?;
-        let magic: u64 = self.proxy.read.read_nix()?;
-        if magic != WORKER_MAGIC_2 {
-            Err(anyhow!("unexpected WORKER_MAGIC_2: got {magic:x}"))?;
-        }
-        let protocol_version: u64 = self.proxy.read.read_nix()?;
-        if protocol_version < PROTOCOL_VERSION.into() {
-            Err(anyhow!(
-                "unexpected protocol version: got {protocol_version}"
-            ))?;
-        }
-        self.proxy.write.write_nix(&client_version)?;
-        self.proxy.write.write_nix(&0u64)?; // cpu affinity, obsolete
-        self.proxy.write.write_nix(&0u64)?; // reserve space, obsolete
-        self.proxy.write.flush()?;
-        let proxy_daemon_version: NixString = self.proxy.read.read_nix()?;
+        let client_version = self.client.handshake("rust-nix-bazel-0.1.0")?;
+        let proxy_daemon_version = self.proxy.handshake(client_version)?;
         eprintln!(
             "Proxy daemon is: {}",
             String::from_utf8_lossy(proxy_daemon_version.0.as_ref())
@@ -490,9 +488,9 @@ impl<R: Read, W: Write> NixProxy<R, W> {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
-struct DaemonVersion {
-    major: u8,
-    minor: u8,
+pub struct DaemonVersion {
+    pub major: u8,
+    pub minor: u8,
 }
 
 impl From<u64> for DaemonVersion {
