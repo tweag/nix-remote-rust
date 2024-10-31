@@ -154,10 +154,7 @@ const PROTOCOL_VERSION: DaemonVersion = DaemonVersion {
     minor: 34,
 };
 
-struct DaemonHandle {
-    child_in: std::process::ChildStdin,
-    child_out: std::process::ChildStdout,
-}
+struct DaemonHandle(Client<std::process::ChildStdout, std::process::ChildStdin>);
 
 impl DaemonHandle {
     pub fn new() -> Self {
@@ -168,10 +165,24 @@ impl DaemonHandle {
             .spawn()
             .unwrap();
 
-        Self {
-            child_in: child.stdin.take().unwrap(),
-            child_out: child.stdout.take().unwrap(),
-        }
+        Self (Client::new(
+            child.stdout.take().unwrap(),
+            child.stdin.take().unwrap(),
+        ))
+    }
+}
+
+impl std::ops::Deref for DaemonHandle {
+    type Target = Client<std::process::ChildStdout, std::process::ChildStdin>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl std::ops::DerefMut for DaemonHandle {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
     }
 }
 
@@ -181,21 +192,47 @@ impl Default for DaemonHandle {
     }
 }
 
+pub struct Client<R, W> {
+    read: R,
+    write: W,
+}
+
+pub struct Server<R, W> {
+    read: NixRead<R>,
+    write: NixWrite<W>,
+}
+
+impl<R: Read, W: Write> Client<R, W> {
+    pub fn new(read: R, write: W) -> Self {
+        Self {
+            read,
+            write,
+        }
+    }
+}
+
+impl<R: Read, W: Write> Server<R, W> {
+    pub fn new(r: R, w: W) -> Self {
+        Self {
+            read: NixRead { inner: r },
+            write: NixWrite { inner: w },
+        }
+    }
+}
+
 /// A proxy to the nix daemon.
 ///
 /// This doesn't currently *do* very much, it just inspects the protocol as it goes past.
 /// But it can be used to test our protocol implementation.
 pub struct NixProxy<R, W> {
-    pub read: NixRead<R>,
-    pub write: NixWrite<W>,
+    client: Server<R, W>,
     proxy: DaemonHandle,
 }
 
 impl<R: Read, W: Write> NixProxy<R, W> {
     pub fn new(r: R, w: W) -> Self {
         Self {
-            read: NixRead { inner: r },
-            write: NixWrite { inner: w },
+            client: Server::new(r, w),
             proxy: DaemonHandle::new(),
         }
     }
@@ -345,18 +382,18 @@ impl<R: Read, W: Write> NixProxy<R, W> {
     //
     // Returns the client version.
     pub fn handshake(&mut self) -> Result<u64> {
-        let magic = self.read.read_u64()?;
+        let magic = self.client.read.read_u64()?;
         if magic != WORKER_MAGIC_1 {
             eprintln!("{magic:x}");
             eprintln!("{WORKER_MAGIC_1:x}");
             todo!("handle error: protocol mismatch 1");
         }
 
-        self.write.write_u64(WORKER_MAGIC_2)?;
-        self.write.write_u64(PROTOCOL_VERSION.into())?;
-        self.write.flush()?;
+        self.client.write.write_u64(WORKER_MAGIC_2)?;
+        self.client.write.write_u64(PROTOCOL_VERSION.into())?;
+        self.client.write.flush()?;
 
-        let client_version = self.read.read_u64()?;
+        let client_version = self.client.read.read_u64()?;
 
         if client_version < PROTOCOL_VERSION.into() {
             Err(anyhow!("Client version {client_version} is too old"))?;
@@ -365,19 +402,19 @@ impl<R: Read, W: Write> NixProxy<R, W> {
         // TODO keep track of number of WorkerOps performed
         let mut _op_count: u64 = 0;
 
-        let _obsolete_cpu_affinity = self.read.read_u64()?;
-        let _obsolete_reserve_space = self.read.read_u64()?;
-        self.write.write_string("rust-nix-bazel-0.1.0".as_bytes())?;
-        self.write.flush()?;
+        let _obsolete_cpu_affinity = self.client.read.read_u64()?;
+        let _obsolete_reserve_space = self.client.read.read_u64()?;
+        self.client.write.write_string("rust-nix-bazel-0.1.0".as_bytes())?;
+        self.client.write.flush()?;
         Ok(PROTOCOL_VERSION.into())
     }
 
     fn forward_stderr(&mut self) -> Result<()> {
         loop {
-            let msg: stderr::Msg = self.proxy.child_out.read_nix()?;
-            self.write.inner.write_nix(&msg)?;
+            let msg: stderr::Msg = self.proxy.read.read_nix()?;
+            self.client.write.inner.write_nix(&msg)?;
             eprintln!("read stderr msg {msg:?}");
-            self.write.inner.flush()?;
+            self.client.write.inner.flush()?;
 
             if msg == stderr::Msg::Last(()) {
                 break;
@@ -387,7 +424,7 @@ impl<R: Read, W: Write> NixProxy<R, W> {
     }
 
     pub fn next_op(&mut self) -> Result<Option<WorkerOp>> {
-        match self.read.inner.read_nix::<WorkerOp>() {
+        match self.client.read.inner.read_nix::<WorkerOp>() {
             Err(serialize::Error::Io(e)) if e.kind() == std::io::ErrorKind::UnexpectedEof => {
                 Ok(None)
             }
@@ -404,23 +441,23 @@ impl<R: Read, W: Write> NixProxy<R, W> {
         let client_version = self.handshake()?;
 
         // Shake hands with the daemon that we're proxying.
-        self.proxy.child_in.write_nix(&WORKER_MAGIC_1)?;
-        self.proxy.child_in.flush()?;
-        let magic: u64 = self.proxy.child_out.read_nix()?;
+        self.proxy.write.write_nix(&WORKER_MAGIC_1)?;
+        self.proxy.write.flush()?;
+        let magic: u64 = self.proxy.read.read_nix()?;
         if magic != WORKER_MAGIC_2 {
             Err(anyhow!("unexpected WORKER_MAGIC_2: got {magic:x}"))?;
         }
-        let protocol_version: u64 = self.proxy.child_out.read_nix()?;
+        let protocol_version: u64 = self.proxy.read.read_nix()?;
         if protocol_version < PROTOCOL_VERSION.into() {
             Err(anyhow!(
                 "unexpected protocol version: got {protocol_version}"
             ))?;
         }
-        self.proxy.child_in.write_nix(&client_version)?;
-        self.proxy.child_in.write_nix(&0u64)?; // cpu affinity, obsolete
-        self.proxy.child_in.write_nix(&0u64)?; // reserve space, obsolete
-        self.proxy.child_in.flush()?;
-        let proxy_daemon_version: NixString = self.proxy.child_out.read_nix()?;
+        self.proxy.write.write_nix(&client_version)?;
+        self.proxy.write.write_nix(&0u64)?; // cpu affinity, obsolete
+        self.proxy.write.write_nix(&0u64)?; // reserve space, obsolete
+        self.proxy.write.flush()?;
+        let proxy_daemon_version: NixString = self.proxy.read.read_nix()?;
         eprintln!(
             "Proxy daemon is: {}",
             String::from_utf8_lossy(proxy_daemon_version.0.as_ref())
@@ -428,7 +465,7 @@ impl<R: Read, W: Write> NixProxy<R, W> {
         self.forward_stderr()?;
 
         loop {
-            let op = match self.read.inner.read_nix::<WorkerOp>() {
+            let op = match self.client.read.inner.read_nix::<WorkerOp>() {
                 Err(serialize::Error::Io(e)) if e.kind() == std::io::ErrorKind::UnexpectedEof => {
                     eprintln!("EOF, closing");
                     break;
@@ -437,16 +474,16 @@ impl<R: Read, W: Write> NixProxy<R, W> {
             }?;
 
             eprintln!("read op {op:?}");
-            self.proxy.child_in.write_nix(&op).unwrap();
-            op.stream(&mut self.read.inner, &mut self.proxy.child_in)
+            self.proxy.write.write_nix(&op).unwrap();
+            op.stream(&mut self.client.read.inner, &mut self.proxy.write)
                 .unwrap();
-            self.proxy.child_in.flush().unwrap();
+            self.proxy.write.flush().unwrap();
 
             self.forward_stderr()?;
 
             // Read back the actual response.
-            op.proxy_response(&mut self.proxy.child_out, &mut self.write.inner)?;
-            self.write.inner.flush()?;
+            op.proxy_response(&mut self.proxy.read, &mut self.client.write.inner)?;
+            self.client.write.inner.flush()?;
         }
         Ok(())
     }
