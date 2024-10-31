@@ -230,6 +230,10 @@ impl<R: Read, W: Write> Client<R, W> {
         let daemon_version: NixString = self.read.read_nix()?;
         Ok(daemon_version)
     }
+
+    pub fn read_stderr_msg(&mut self) -> Result<stderr::Msg> {
+        Ok(self.read.read_nix()?)
+    }
 }
 
 impl<R: Read, W: Write> Server<R, W> {
@@ -265,6 +269,12 @@ impl<R: Read, W: Write> Server<R, W> {
         self.write.write_string(server_version.as_bytes())?;
         self.write.flush()?;
         Ok(PROTOCOL_VERSION)
+    }
+
+    pub fn write_stderr_msg(&mut self, msg: &stderr::Msg) -> Result<()> {
+        self.write.write_nix(msg)?;
+        self.write.flush()?;
+        Ok(())
     }
 }
 
@@ -427,10 +437,9 @@ impl<W: Write> NixWrite<W> {
 impl<R: Read, W: Write> NixProxy<R, W> {
     fn forward_stderr(&mut self) -> Result<()> {
         loop {
-            let msg: stderr::Msg = self.proxy.read.read_nix()?;
-            self.client.write.inner.write_nix(&msg)?;
+            let msg = self.proxy.read_stderr_msg()?;
             eprintln!("read stderr msg {msg:?}");
-            self.client.write.inner.flush()?;
+            self.client.write_stderr_msg(&msg)?;
 
             if msg == stderr::Msg::Last(()) {
                 break;
