@@ -93,7 +93,7 @@ fn main() {
                 macro_rules! respond {
                     ($($name:ident),*) => {
                         #[allow(unreachable_patterns)]
-                        match worker_op.as_ref() {
+                        match worker_op {
                             // Special case for NarFromPath because the response could be large
                             // and needs to be streamed instead of read into memory.
                             WorkerOp::NarFromPath(_inner, _resp) => {

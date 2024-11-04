@@ -10,7 +10,6 @@ use serde::Serialize;
 use std::{
     fmt::Debug,
     io::{Read, Write},
-    sync::Arc,
 };
 
 use crate::{NixRead, NixWrite, Result, PROTOCOL_VERSION, WORKER_MAGIC_1, WORKER_MAGIC_2};
@@ -19,7 +18,6 @@ pub struct NixDaemonClient<R, W> {
     rx_from_daemon: NixRead<R>,
     tx_to_daemon: NixWrite<W>,
     tx_op_count: u64,
-    last_op: Option<Arc<WorkerOp>>,
 }
 
 impl<R: Read, W: Write> NixDaemonClient<R, W> {
@@ -28,7 +26,6 @@ impl<R: Read, W: Write> NixDaemonClient<R, W> {
             rx_from_daemon: NixRead { inner: r },
             tx_to_daemon: NixWrite { inner: w },
             tx_op_count: 0,
-            last_op: None,
         };
         // handshake
         daemon.handshake_with_daemon().unwrap();
@@ -84,10 +81,9 @@ impl<R: Read, W: Write> NixDaemonClient<R, W> {
         Ok(())
     }
 
-    pub fn send_worker_op_to_daemon(&mut self, worker_op: &Arc<WorkerOp>) -> Result<()> {
+    pub fn send_worker_op_to_daemon(&mut self, worker_op: &WorkerOp) -> Result<()> {
         self.tx_op_count += 1;
-        self.last_op = Some(worker_op.clone());
-        self.tx_to_daemon.inner.write_nix(&worker_op.as_ref())?;
+        self.tx_to_daemon.inner.write_nix(&worker_op)?;
         self.tx_to_daemon.inner.flush()?;
         Ok(())
     }

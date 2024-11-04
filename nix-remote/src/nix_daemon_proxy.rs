@@ -2,10 +2,7 @@ pub use crate::serialize::{NixReadExt, NixWriteExt};
 use crate::{serialize::NixSerializer, stderr, worker_op::WorkerOp, Error};
 use anyhow::anyhow;
 use serde::Deserialize;
-use std::{
-    io::{Read, Write},
-    sync::Arc,
-};
+use std::io::{Read, Write};
 
 use crate::{NixRead, NixWrite, Result, PROTOCOL_VERSION, WORKER_MAGIC_1, WORKER_MAGIC_2};
 
@@ -13,7 +10,6 @@ pub struct NixDaemonProxy<R, W> {
     rx_from_client: NixRead<R>,
     tx_to_client: NixWrite<W>,
     rx_op_count: u64,
-    last_op: Option<Arc<WorkerOp>>,
 }
 
 impl<R: Read, W: Write> NixDaemonProxy<R, W> {
@@ -22,7 +18,6 @@ impl<R: Read, W: Write> NixDaemonProxy<R, W> {
             rx_from_client: NixRead { inner: r },
             tx_to_client: NixWrite { inner: w },
             rx_op_count: 0,
-            last_op: None,
         };
         // handshake
         daemon.handshake_with_client().unwrap();
@@ -58,7 +53,7 @@ impl<R: Read, W: Write> NixDaemonProxy<R, W> {
         Ok(())
     }
 
-    pub fn receive_next_op_from_client(&mut self) -> Result<Arc<WorkerOp>> {
+    pub fn receive_next_op_from_client(&mut self) -> Result<WorkerOp> {
         match self.rx_from_client.inner.read_nix::<WorkerOp>() {
             Err(crate::serialize::Error::Io(e))
                 if e.kind() == std::io::ErrorKind::UnexpectedEof =>
@@ -70,11 +65,9 @@ impl<R: Read, W: Write> NixDaemonProxy<R, W> {
                 eprintln!("EOF, closing");
                 Err(Error::Deser(e))
             }
-            Ok(x) => {
-                let worker_op_as_arc = Arc::new(x);
+            Ok(worker_op) => {
                 self.rx_op_count += 1;
-                self.last_op = Some(worker_op_as_arc.clone());
-                Ok(worker_op_as_arc)
+                Ok(worker_op)
             }
         }
     }
