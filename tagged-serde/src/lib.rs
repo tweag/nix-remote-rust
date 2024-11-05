@@ -10,9 +10,10 @@ pub fn derive(input: TokenStream) -> TokenStream {
 
     let syn::Data::Enum(input) = input.data else {
         // TODO: make this nice
-        return quote!{
+        return quote! {
             compile_error!("not an enum");
-        }.into();
+        }
+        .into();
         // panic!("not an enum");
     };
 

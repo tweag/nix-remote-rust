@@ -8,9 +8,9 @@ license = "MIT"
 description = "A procedural macro for serde enums with integer tags"
 
 [dependencies]
-proc-macro2 = "1.0.56"
-quote = "1.0.26"
-syn = { version = "2.0.15", features = ["full", "extra-traits"] }
+proc-macro2.workspace = true
+quote.workspace = true
+syn.workspace = true
 
 [lib]
 proc-macro = true

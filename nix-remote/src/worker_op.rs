@@ -1,18 +1,14 @@
 //! Worker ops from the Nix protocol.
 
 use serde::{Deserialize, Serialize};
-use std::io::Read;
-use std::io::Write;
 use std::ops::{Deref, DerefMut};
 use tagged_serde::TaggedSerde;
 
-use crate::framed_data;
 use crate::nar::Nar;
+use crate::{DerivedPath, Path, PathSet, Realisation, RealisationSet};
 use crate::{
-    serialize::{NixDeserializer, NixSerializer},
     NarHash, NixString, Result, StorePath, StorePathSet, StringSet, ValidPathInfoWithPath,
 };
-use crate::{DerivedPath, Path, PathSet, Realisation, RealisationSet};
 
 /// A zero-sized marker type. Its job is to mark the expected response
 /// type for each worker op.
@@ -41,6 +37,12 @@ impl<T> Deref for Plain<T> {
     }
 }
 
+impl<T> DerefMut for Plain<T> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
+    }
+}
+
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 #[cfg_attr(test, derive(arbitrary::Arbitrary))]
 pub struct WithFramedSource<T>(pub T);
@@ -59,19 +61,19 @@ impl<T> DerefMut for WithFramedSource<T> {
     }
 }
 
-pub trait Stream {
-    fn stream(&self, read: &mut impl Read, write: &mut impl Write) -> anyhow::Result<()>;
+pub trait StreamingRecv {
+    fn requires_streaming(&self) -> bool;
 }
 
-impl<T> Stream for WithFramedSource<T> {
-    fn stream(&self, read: &mut impl Read, write: &mut impl Write) -> anyhow::Result<()> {
-        framed_data::stream(read, write)
+impl<T> StreamingRecv for WithFramedSource<T> {
+    fn requires_streaming(&self) -> bool {
+        true
     }
 }
 
-impl<T> Stream for Plain<T> {
-    fn stream(&self, _read: &mut impl Read, _write: &mut impl Write) -> anyhow::Result<()> {
-        Ok(())
+impl<T> StreamingRecv for Plain<T> {
+    fn requires_streaming(&self) -> bool {
+        false
     }
 }
 
@@ -176,54 +178,18 @@ macro_rules! for_each_op {
     };
 }
 
-impl Stream for WorkerOp {
-    fn stream(&self, read: &mut impl Read, write: &mut impl Write) -> anyhow::Result<()> {
-        eprintln!("streaming worker op");
-        macro_rules! stream {
+impl StreamingRecv for WorkerOp {
+    fn requires_streaming(&self) -> bool {
+        macro_rules! requires_streaming {
             ($($name:ident),*) => {
                 match self {
                     $(WorkerOp::$name(op, _resp) => {
-                        op.stream(read, write)?;
+                        return op.requires_streaming();
                     },)*
                 }
             };
         }
-
-        for_each_op!(stream!);
-        Ok(())
-    }
-}
-
-impl WorkerOp {
-    pub fn proxy_response(&self, mut read: impl Read, mut write: impl Write) -> Result<()> {
-        let mut deser = NixDeserializer { read: &mut read };
-        let mut ser = NixSerializer { write: &mut write };
-        let mut dbg_buf = Vec::new();
-        let mut dbg_ser = NixSerializer {
-            write: &mut dbg_buf,
-        };
-        macro_rules! respond {
-            ($($name:ident),*) => {
-                #[allow(unreachable_patterns)]
-                match self {
-                    // Special case for NarFromPath because the response could be large
-                    // and needs to be streamed instead of read into memory.
-                    WorkerOp::NarFromPath(_inner, _resp) => {
-                      crate::nar::stream(&mut deser.read, &mut ser.write)?;
-                    }
-                    $(WorkerOp::$name(_inner, resp) => {
-                        let reply = resp.ty(<_>::deserialize(&mut deser)?);
-                        eprintln!("read reply {reply:?}");
-
-                        reply.serialize(&mut dbg_ser)?;
-                        reply.serialize(&mut ser)?;
-                    },)*
-                }
-            };
-        }
-
-        for_each_op!(respond!);
-        Ok(())
+        for_each_op!(requires_streaming!);
     }
 }
 
@@ -251,8 +217,8 @@ pub enum Verbosity {
     Vomit,
 }
 
-#[cfg_attr(test, derive(arbitrary::Arbitrary))]
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[cfg_attr(test, derive(arbitrary::Arbitrary))]
 pub struct SetOptions {
     pub keep_failing: bool,
     pub keep_going: bool,
@@ -426,8 +392,8 @@ pub struct AddToStoreNar {
     pub dont_check_sigs: bool,
 }
 
-#[cfg_attr(test, derive(arbitrary::Arbitrary))]
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[cfg_attr(test, derive(arbitrary::Arbitrary))]
 pub struct FindRootsResponse {
     pub roots: Vec<(Path, StorePath)>,
 }
@@ -513,7 +479,10 @@ mod tests {
     use arbtest::arbtest;
     use serde_bytes::ByteBuf;
 
-    use crate::{serialize::NixSerializer, worker_op::SetOptions};
+    use crate::{
+        serialize::{NixDeserializer, NixSerializer},
+        worker_op::SetOptions,
+    };
 
     use super::*;
 
