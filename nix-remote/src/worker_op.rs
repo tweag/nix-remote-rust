@@ -37,6 +37,12 @@ impl<T> Deref for Plain<T> {
     }
 }
 
+impl<T> DerefMut for Plain<T> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
+    }
+}
+
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 #[cfg_attr(test, derive(arbitrary::Arbitrary))]
 pub struct WithFramedSource<T>(pub T);
