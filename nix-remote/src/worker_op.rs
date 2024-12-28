@@ -25,6 +25,14 @@ impl<T> Resp<T> {
     }
 }
 
+impl<T> Default for Resp<T> {
+    fn default() -> Self {
+        Self {
+            marker: std::marker::PhantomData,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 #[cfg_attr(test, derive(arbitrary::Arbitrary))]
 pub struct Plain<T>(pub T);
@@ -40,6 +48,12 @@ impl<T> Deref for Plain<T> {
 impl<T> DerefMut for Plain<T> {
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.0
+    }
+}
+
+impl<T> From<T> for Plain<T> {
+    fn from(value: T) -> Self {
+        Plain(value)
     }
 }
 
