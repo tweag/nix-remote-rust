@@ -12,7 +12,7 @@ use crate::{
 
 /// A zero-sized marker type. Its job is to mark the expected response
 /// type for each worker op.
-#[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Copy, Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[cfg_attr(test, derive(arbitrary::Arbitrary))]
 pub struct Resp<T> {
     #[serde(skip)]
@@ -22,6 +22,14 @@ pub struct Resp<T> {
 impl<T> Resp<T> {
     pub fn ty(&self, v: T) -> T {
         v
+    }
+}
+
+impl<T> Default for Resp<T> {
+    fn default() -> Self {
+        Self {
+            marker: std::marker::PhantomData,
+        }
     }
 }
 
@@ -40,6 +48,12 @@ impl<T> Deref for Plain<T> {
 impl<T> DerefMut for Plain<T> {
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.0
+    }
+}
+
+impl<T> From<T> for Plain<T> {
+    fn from(value: T) -> Self {
+        Plain(value)
     }
 }
 
