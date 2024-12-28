@@ -12,7 +12,7 @@ use crate::{
 
 /// A zero-sized marker type. Its job is to mark the expected response
 /// type for each worker op.
-#[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Copy, Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[cfg_attr(test, derive(arbitrary::Arbitrary))]
 pub struct Resp<T> {
     #[serde(skip)]
