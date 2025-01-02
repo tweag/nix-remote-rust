@@ -6,8 +6,8 @@
 //!   a 64-bit opcode followed by the body of the message. The final message has the opcode `Last`.
 //! - the daemon sends the reply to the worker op.
 
+use bstr::BString;
 use serde::{Deserialize, Serialize};
-use serde_bytes::ByteBuf;
 use tagged_serde::TaggedSerde;
 
 use crate::{NixString, Result};
@@ -39,10 +39,10 @@ pub enum Msg {
 
 #[derive(Debug, Deserialize, Serialize, Clone, PartialEq, Eq)]
 pub struct StderrError {
-    pub typ: ByteBuf,
+    pub typ: BString,
     pub level: u64,
-    pub name: ByteBuf,
-    pub message: ByteBuf,
+    pub name: BString,
+    pub message: BString,
     pub have_pos: u64,
     pub traces: Vec<Trace>,
 }
@@ -52,7 +52,7 @@ pub struct StderrStartActivity {
     pub act: u64,
     pub lvl: u64,
     pub typ: u64,
-    pub s: ByteBuf,
+    pub s: BString,
     pub fields: LoggerFields,
     pub parent: u64,
 }
@@ -67,7 +67,7 @@ pub struct StderrResult {
 #[derive(Debug, Deserialize, Serialize, Clone, PartialEq, Eq)]
 pub struct Trace {
     pub have_pos: u64,
-    pub trace: ByteBuf,
+    pub trace: BString,
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone, PartialEq, Eq)]
@@ -80,5 +80,5 @@ pub enum LoggerField {
     #[tagged_serde = 0]
     Int(u64),
     #[tagged_serde = 1]
-    String(ByteBuf),
+    String(BString),
 }
