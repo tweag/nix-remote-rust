@@ -7,6 +7,7 @@ repository = "https://github.com/tweag/nix-remote-rust"
 
 [dependencies]
 anyhow.workspace = true
+bstr = { version = "1.11.1", features = ["serde"] }
 serde.workspace = true
 serde_bytes.workspace = true
 tagged-serde.workspace = true
