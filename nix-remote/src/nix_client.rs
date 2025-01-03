@@ -9,7 +9,7 @@ use anyhow::anyhow;
 use serde::Serialize;
 use std::{
     fmt::Debug,
-    io::{Read, Write},
+    io::{BufRead, Read, Write},
 };
 
 use crate::{NixRead, NixWrite, Result, PROTOCOL_VERSION, WORKER_MAGIC_1, WORKER_MAGIC_2};
@@ -112,5 +112,20 @@ impl<R: Read, W: Write> NixDaemonClient<R, W> {
 
     pub fn reader(&mut self) -> &mut R {
         &mut self.rx_from_daemon.inner
+    }
+}
+
+impl<R: BufRead, W: Write> NixDaemonClient<R, W> {
+    /// Reads and returns the next `stderr` message from the nix daemon.
+    ///
+    /// Returns `Ok(None)` if the daemon has already closed the stream. (If the
+    /// daemon closes the stream mid-message, that's an error.)
+    pub fn read_error_msg_or_eof(&mut self) -> Result<Option<stderr::Msg>> {
+        if self.rx_from_daemon.inner.fill_buf()?.is_empty() {
+            Ok(None)
+        } else {
+            let msg: stderr::Msg = self.rx_from_daemon.inner.read_nix()?;
+            Ok(Some(msg))
+        }
     }
 }
