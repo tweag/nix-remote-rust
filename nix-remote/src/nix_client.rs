@@ -55,6 +55,7 @@ impl<R: Read, W: Write> NixDaemonClient<R, W> {
             "Proxy daemon is: {}",
             String::from_utf8_lossy(proxy_daemon_version.0.as_ref())
         );
+        let _trusted_flag: u64 = self.rx_from_daemon.inner.read_nix()?;
         loop {
             let err_msg = self.read_error_msg().unwrap();
             if err_msg == Msg::Last(()) {
