@@ -113,6 +113,10 @@ impl<R: Read, W: Write> NixDaemonClient<R, W> {
     pub fn reader(&mut self) -> &mut R {
         &mut self.rx_from_daemon.inner
     }
+
+    pub fn writer(&mut self) -> &mut W {
+        &mut self.tx_to_daemon.inner
+    }
 }
 
 impl<R: BufRead, W: Write> NixDaemonClient<R, W> {
