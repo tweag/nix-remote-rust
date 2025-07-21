@@ -32,6 +32,7 @@ impl<R: Read, W: Write> NixDaemonClient<R, W> {
         Ok(daemon)
     }
 
+    #[tracing::instrument(skip(self))]
     fn handshake_with_daemon(&mut self) -> Result<()> {
         self.tx_to_daemon.inner.write_nix(&WORKER_MAGIC_1)?;
         self.tx_to_daemon.inner.flush()?;
@@ -51,7 +52,7 @@ impl<R: Read, W: Write> NixDaemonClient<R, W> {
         self.tx_to_daemon.inner.write_nix(&0u64)?; // reserve space, obsolete
         self.tx_to_daemon.inner.flush()?;
         let proxy_daemon_version: NixString = self.rx_from_daemon.inner.read_nix()?;
-        eprintln!(
+        tracing::info!(
             "Proxy daemon is: {}",
             String::from_utf8_lossy(proxy_daemon_version.0.as_ref())
         );
@@ -65,6 +66,7 @@ impl<R: Read, W: Write> NixDaemonClient<R, W> {
         Ok(())
     }
 
+    #[tracing::instrument(skip(self))]
     pub fn streaming_write_buff(&mut self, buf: &[u8], chunk_len: usize) -> Result<()> {
         let ser = crate::serialize::NixSerializer {
             write: &mut self.tx_to_daemon.inner,
@@ -73,6 +75,7 @@ impl<R: Read, W: Write> NixDaemonClient<R, W> {
         Ok(())
     }
 
+    #[tracing::instrument(skip(self))]
     pub fn streaming_write_len(&mut self, len: u64) -> Result<()> {
         let mut ser = crate::serialize::NixSerializer {
             write: &mut self.tx_to_daemon.inner,
@@ -81,6 +84,7 @@ impl<R: Read, W: Write> NixDaemonClient<R, W> {
         Ok(())
     }
 
+    #[tracing::instrument(skip(self))]
     pub fn send_worker_op_to_daemon(&mut self, worker_op: &WorkerOp) -> Result<()> {
         self.tx_op_count += 1;
         self.tx_to_daemon.inner.write_nix(&worker_op)?;
@@ -120,6 +124,7 @@ impl<R: BufRead, W: Write> NixDaemonClient<R, W> {
     ///
     /// Returns `Ok(None)` if the daemon has already closed the stream. (If the
     /// daemon closes the stream mid-message, that's an error.)
+    #[tracing::instrument(skip(self))]
     pub fn read_error_msg_or_eof(&mut self) -> Result<Option<stderr::Msg>> {
         if self.rx_from_daemon.inner.fill_buf()?.is_empty() {
             Ok(None)
