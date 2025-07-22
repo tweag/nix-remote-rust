@@ -1,0 +1,41 @@
+env:
+  RUST_STABLE_VER: "1.88"
+
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+jobs:
+  checks:
+    name: cargo clippy and test
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [windows-latest, macos-latest, ubuntu-latest]
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust ${{ env.RUST_STABLE_VER }}
+        uses: dtolnay/rust-toolchain@b3b07ba8b418998c39fb20f53e8b695cdcc8de1b
+        with:
+          toolchain: ${{ env.RUST_STABLE_VER }}
+          components: clippy
+
+      - name: Restore cache
+        uses: Swatinem/rust-cache@9d47c6ad4b02e050fd481d890b2ea34778fd09d6
+        with:
+          save-if: ${{ github.event_name != 'merge_group' }}
+
+      - name: Run cargo fmt
+        run: cargo fmt --all --check
+
+      - name: Run cargo test
+        run: cargo test
+
+      - name: Run cargo clippy
+        run: cargo clippy
