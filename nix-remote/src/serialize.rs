@@ -49,6 +49,7 @@ impl<R: Read, W: Write> Tee<R, W> {
 }
 
 impl<R: Read, W: Write> Read for Tee<R, W> {
+    #[tracing::instrument(name = "Tee read", skip(self, buf))]
     fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
         let n = self.read.read(buf)?;
         self.write.write_all(&buf[0..n])?;
@@ -147,12 +148,14 @@ impl<'a, 'de: 'a> de::SeqAccess<'de> for Seq<'a, 'de> {
 }
 
 impl<'de> NixDeserializer<'de> {
+    #[tracing::instrument(skip(self), ret)]
     pub fn read_u64(&mut self) -> Result<u64> {
         let mut buf = [0u8; 8];
         self.read.read_exact(&mut buf)?;
         Ok(u64::from_le_bytes(buf))
     }
 
+    #[tracing::instrument(skip(self))]
     pub fn read_byte_buf(&mut self) -> Result<Vec<u8>> {
         // possible errors:
         // Unexecpted EOF
@@ -175,6 +178,7 @@ impl<'de> NixDeserializer<'de> {
 }
 
 impl<'se> NixSerializer<'se> {
+    #[tracing::instrument(skip(self))]
     pub fn write_byte_buf(&mut self, s: &[u8]) -> Result<()> {
         let len = s.len();
 

@@ -30,12 +30,14 @@ impl std::fmt::Debug for FramedData {
 }
 
 impl FramedData {
+    #[tracing::instrument(skip(r), err)]
     pub fn read(mut r: impl Read) -> Result<FramedData> {
         let mut de = crate::serialize::NixDeserializer { read: &mut r };
 
         let mut ret = FramedData::default();
         loop {
             let len = u64::deserialize(&mut de)?;
+            tracing::trace!(?len, "FramedData read");
             if len == 0 {
                 break;
             }
@@ -47,10 +49,12 @@ impl FramedData {
         Ok(ret)
     }
 
+    #[tracing::instrument(skip(self, w), err)]
     pub fn write(&self, mut w: impl Write) -> Result<()> {
         let mut ser = crate::serialize::NixSerializer { write: &mut w };
 
         for data in &self.data {
+            tracing::trace!(len = ?data.len(), "FramedData write");
             (data.len() as u64).serialize(&mut ser)?;
             ser.write.write_all(data)?;
         }

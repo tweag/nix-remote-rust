@@ -12,6 +12,7 @@ serde.workspace = true
 serde_bytes.workspace = true
 tagged-serde.workspace = true
 thiserror.workspace = true
+tracing = "0.1.41"
 
 [dev-dependencies]
 arbitrary.workspace = true

@@ -228,6 +228,7 @@ trait StringReader<'a> {
     //
     // The default impl doesn't do any streaming, it just reads the string into memory using
     // `expect_string` and then writes it out again.
+    #[tracing::instrument(skip(self, write))]
     fn write_string(&mut self, mut write: impl std::io::Write) -> Result<(), Self::Error> {
         write
             .write_all(&self.expect_string()?.0)
@@ -245,6 +246,7 @@ impl<'v, A: SeqAccess<'v>> StringReader<'v> for A {
     }
 }
 
+#[tracing::instrument(skip(seq, sink))]
 fn read_entry<'v, 's, A: StringReader<'v>, S: EntrySink<'s> + 's>(
     seq: &mut A,
     sink: S,
@@ -317,6 +319,7 @@ impl<'v> StringReader<'v> for NixDeserializer<'v> {
         NixString::deserialize(self)
     }
 
+    #[tracing::instrument(skip(self, write))]
     fn write_string(
         &mut self,
         mut write: impl std::io::Write,
@@ -348,6 +351,7 @@ impl<'v> StringReader<'v> for NixDeserializer<'v> {
 // what we do is to parse it into a dummy `EntrySink` (just so we know when the
 // Nar ends) while using a `Tee` to simultaneously write the consumed input into
 // the output.
+#[tracing::instrument(skip(read, write))]
 pub fn stream<R: std::io::Read, W: std::io::Write>(
     read: R,
     write: W,

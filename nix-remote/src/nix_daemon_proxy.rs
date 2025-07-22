@@ -24,11 +24,11 @@ impl<R: Read, W: Write> NixDaemonProxy<R, W> {
         Ok(daemon)
     }
 
+    #[tracing::instrument(skip(self))]
     fn handshake_with_client(&mut self) -> Result<()> {
         let magic = self.rx_from_client.read_u64()?;
         if magic != WORKER_MAGIC_1 {
-            eprintln!("{magic:x}");
-            eprintln!("{WORKER_MAGIC_1:x}");
+            tracing::error!("Got magic {magic:x}, expected magic {WORKER_MAGIC_1:x}");
             todo!("handle error: protocol mismatch 1");
         }
 
@@ -56,6 +56,7 @@ impl<R: Read, W: Write> NixDaemonProxy<R, W> {
         Ok(())
     }
 
+    #[tracing::instrument(skip(self))]
     pub fn receive_next_op_from_client(&mut self) -> Result<WorkerOp> {
         match self.rx_from_client.inner.read_nix::<WorkerOp>() {
             Err(crate::serialize::Error::Io(e))
@@ -80,11 +81,13 @@ impl<R: Read, W: Write> NixDaemonProxy<R, W> {
         Ok(())
     }
 
+    #[tracing::instrument(skip(self))]
     pub fn send_error_to_client(&mut self, error_msg: &crate::stderr::Msg) -> Result<()> {
         self.tx_to_client.inner.write_nix(error_msg)?;
         Ok(())
     }
 
+    #[tracing::instrument(skip(self), ret)]
     pub fn streaming_length(&mut self) -> Result<usize> {
         let mut de = crate::serialize::NixDeserializer {
             read: &mut self.rx_from_client.inner,
