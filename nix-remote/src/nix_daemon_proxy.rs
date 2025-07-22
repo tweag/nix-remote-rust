@@ -44,8 +44,11 @@ impl<R: Read, W: Write> NixDaemonProxy<R, W> {
 
         let _obsolete_cpu_affinity = self.rx_from_client.read_u64()?;
         let _obsolete_reserve_space = self.rx_from_client.read_u64()?;
+        // Version
         self.tx_to_client
             .write_string("rust-nix-bazel-0.1.0".as_bytes())?;
+        // Trusted flag. FIXME(jadel): configurability?
+        self.tx_to_client.write_u64(1)?;
         self.tx_to_client.flush()?;
 
         self.tx_to_client.write_nix(&stderr::Msg::Last(()))?;
