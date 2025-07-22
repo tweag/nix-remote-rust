@@ -81,6 +81,8 @@ impl AsRef<[u8]> for Path {
     }
 }
 
+// TODO: this doesn't work on windows. Apparently nix on windows is now a thing, so we
+// should figure out how they handle encoding of paths.
 impl AsRef<OsStr> for Path {
     fn as_ref(&self) -> &OsStr {
         OsStr::from_bytes(self.as_ref())
